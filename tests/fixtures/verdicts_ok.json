@@ -1,0 +1,5 @@
+[
+  {"i": 0, "keep": true,  "score": 8, "why": "CUDA kernel perf regression on sm_90, unassigned"},
+  {"i": 1, "keep": false, "score": 1, "why": "Dependabot bump, no human content"},
+  {"i": 2, "keep": true,  "score": 6, "why": "Allocator double free during multi-GPU teardown"}
+]

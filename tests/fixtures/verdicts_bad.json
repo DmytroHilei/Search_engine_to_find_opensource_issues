@@ -1,0 +1,6 @@
+[
+  {"i": 99, "keep": true, "score": 9, "why": "index past the end of a two-issue batch"},
+  {"i": -3, "keep": true, "score": 9, "why": "negative index"},
+  {"i": 2147483648, "keep": true, "score": 9, "why": "index past INT_MAX"},
+  {"i": 0, "keep": true, "score": 7, "why": "the only in-range verdict here"}
+]
