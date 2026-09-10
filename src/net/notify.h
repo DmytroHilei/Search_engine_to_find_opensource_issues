@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "core/arena.h"
+#include "core/board.h"
 #include "net/github.h"
 #include "core/state.h"
 
@@ -23,6 +24,17 @@ int notify_init(void);
  * request. That invariant is asserted by the tests.
  */
 int notify_cycle(arena_t *a, state_t *st, issue_t *issues, size_t n, int dry_run);
+
+/*
+ * One push for the whole cycle: how many entries are new, what the top one is,
+ * and a Click: that opens the board. This is what NOTIFY_SUMMARY_ONLY buys --
+ * the phone stops being a feed and becomes a doorbell.
+ *
+ * `n_new` is board_merge()'s count. Sends nothing and returns 0 when it is
+ * zero: a cycle that found nothing is not worth a buzz. Returns 1 when a push
+ * went out, negative on failure. Same --dry-run contract as notify_cycle().
+ */
+int notify_summary(arena_t *a, const board_t *b, size_t n_new, int dry_run);
 
 /* Maps an llm_score (0..10) onto an ntfy Priority (1..5). */
 int notify_priority(int llm_score);

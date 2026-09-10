@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "core/arena.h"
+#include "core/board.h"
 #include "core/state.h"
 
 #define GH_MAX_LABELS 16
@@ -25,6 +26,13 @@ typedef struct {
     const char *labels[GH_MAX_LABELS];
     int n_labels;
     int comments;
+    /*
+     * Someone already holds it. A bounty only pays the person who was assigned
+     * first, so an assigned issue is worth close to nothing -- and without this
+     * field nothing in the program could ever tell that an issue stopped being
+     * available.
+     */
+    int assigned;
 
     int kw_score;                 /* filled by prefilter_score() */
     int llm_score;                /* filled by judge_batch(), -1 until then */
@@ -47,6 +55,28 @@ int gh_fetch_all(arena_t *a, state_t *st, const char *const *repos, size_t n_rep
 
 /* Promotes the watermarks staged by the last gh_fetch_all() into `st`. */
 void gh_commit_watermarks(state_t *st);
+
+/* Fills `out` from `is`, truncating each field to its board_entry_t bound. */
+void gh_issue_to_board(const issue_t *is, board_entry_t *out);
+
+/*
+ * Re-checks every board entry this cycle's fetch did NOT already refresh, with
+ * one conditional GET per issue through the existing batch path.
+ *
+ * The main fetch is state=open&since=<watermark>, so nothing in it would ever
+ * report that an issue closed or got assigned; without this pass the board
+ * rots into a list of claimed bounties. Flipping the main fetch to state=all
+ * was rejected -- pytorch alone closes enough issues to blow the arena.
+ *
+ * 304 keeps the entry and costs no rate limit; 200 refreshes it, or drops it
+ * when GitHub says closed or assigned; 404 drops it (deleted or transferred);
+ * a transport failure keeps it unchanged, because a network blip must not
+ * silently empty the board. Dropped ids are marked in the seen-set so they do
+ * not come back next cycle -- skipped when dry_run, which writes nothing.
+ *
+ * Returns the number of entries dropped, negative on a setup failure.
+ */
+int gh_recheck(arena_t *a, board_t *b, state_t *st, int dry_run);
 
 /*
  * Parses one issues-array JSON payload. Exposed for the fixture tests.
