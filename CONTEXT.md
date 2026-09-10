@@ -161,16 +161,28 @@ prompt: what you work on, what kind of task you want, what to ignore.
 
 ## 7. Dedup state
 
-Two things persist, both under `$XDG_STATE_HOME/issuewatch/`:
+Three things persist, all under `$XDG_STATE_HOME/issuewatch/`:
 
 - `etags` — small text file, `owner/repo\tETag\twatermark_rfc3339` per line.
-  Rewritten atomically (write temp, `rename(2)`).
 - `seen.bin` — fixed-size mmap'd open-addressing hash set of
   `u64 = hash(issue_id, updated_at)`. `SEEN_CAPACITY` slots (65536 → 512 KB),
   overwriting oldest on collision. Never grows, no compaction, no sqlite.
+- `board.tsv` — the ranked board, one entry per line. See section 14.
 
 Keying on `(id, updated_at)` means a genuinely updated issue can re-notify;
 keying on `id` alone means it never does. `NOTIFY_ON_UPDATE` picks which.
+
+Both text files are rewritten by the same atomic dance — temp file in the same
+directory, `fflush`, `fsync`, `rename(2)`, then `fsync` the directory so the
+rename itself is durable. It lives in `core/fileio.c` behind an emit callback
+rather than being written twice: it is the only durability guarantee the program
+makes, and two copies of it would eventually disagree.
+
+The seen-set gained a second job when the board arrived. It still suppresses
+repeat notifications, but it is now also where `gh_recheck()` records an entry it
+dropped as closed or assigned — otherwise the next `since=` delta would re-add
+that issue, the next re-check would drop it again, and it would flap on and off
+the board forever.
 
 ## 8. Notifications: ntfy
 
@@ -281,12 +293,22 @@ unit use `EnvironmentFile=%h/.config/issuewatch/env` with mode `0600`.
 
 ## 13. Open decisions left to you
 
-- Whether comments on an issue should re-trigger (`NOTIFY_ON_UPDATE`).
-- Whether to add a `--dry-run` that prints to stdout instead of pushing —
-  strongly recommended for tuning keyword weights, which will take a few
-  iterations before the signal-to-noise is right.
+Settled since this was written:
+
+- **`--dry-run` exists** and is the tuning path. It prints and writes nothing:
+  no ntfy POST, no gist PATCH, no `board.tsv`, no watermark. Each module proves
+  that with a call counter its tests assert on, rather than by inspection.
+- **Delivery is a secret gist**, not a hosted page (section 14).
+- **Retention is closed-or-assigned**, not "seen".
+
+Still open:
+
+- Whether comments on an issue should re-trigger (`NOTIFY_ON_UPDATE`). It
+  matters less than it did: under `NOTIFY_SUMMARY_ONLY` the board carries an
+  issue whether or not a push repeats.
 - Whether discovery mode is worth building at all. Probably not until watch
   mode has been running for a month.
+- Whether `BOARD_MAX` of 200 is the right size. Nothing has come close to it.
 
 ## 14. The ranked board
 
@@ -358,6 +380,13 @@ covered notification: a failed gist PATCH must not advance the watermark. The
 merge is keyed by issue id and is therefore idempotent, so re-running a failed
 cycle is safe rather than duplicative.
 
+A judge outage is the one failure that does *not* stop the publish. If every LLM
+batch fails, no new entries are merged and the watermark stays put so those
+issues are re-judged — but the re-check, the ranking and the publish still run.
+A model that is down for a day would otherwise leave the board advertising
+bounties that were claimed hours ago, which is the exact failure the board
+exists to prevent.
+
 `--dry-run` prints the rendered board and writes nothing at all: no gist PATCH,
 no ntfy POST, no `board.tsv`, no watermark. That is asserted structurally by a
 call counter in each module, not by reading the code.
@@ -371,3 +400,60 @@ url are escaped on write and unescaped on read, and the round trip over
 adversarial titles is a required test, not a nice-to-have. A line that fails to
 parse is skipped, never fatal: losing one row costs one row, aborting the load
 costs the whole board.
+
+As built, a row is 12 tab-separated fields — `id`, `repo`, `number`,
+`llm_score`, `kw_score`, `first_seen`, `updated_at`, `etag`, `title`, `why`,
+`html_url`, `assigned` — and a line with any other field count is rejected, so
+an unescaped tab that reached the file is caught rather than silently shifting
+every column. `\r` is escaped alongside `\ \t \n`: not needed for
+parseability, but a bare CR in a text file is a trap for whatever reads it next.
+Oversized text truncates (a clipped title loses a tail); a structural problem —
+a bad id, an unparseable `first_seen`, an unknown escape — skips the row.
+
+### The seam that actually broke
+
+Every module above was tested on its own and all of them passed. The bug was in
+none of them.
+
+`board_entry_t::title` is 256 bytes. A byte-wise truncation of a title made of
+4-byte emoji lands mid-character three times out of four — 255 is 63×4+3 — and
+leaves half a code point in the field. It renders fine. It persists fine. Then
+yyjson, which refuses to encode invalid UTF-8, returns NULL for the gist body,
+`gist_publish()` reports failure, and the cycle publishes **nothing at all**. A
+CJK title divides evenly into 255 and would never have shown it.
+
+Two fixes, because one of them is a backstop and neither is sufficient alone:
+whoever fills a board entry truncates on a UTF-8 boundary (`utf8_trunc_len()`
+already existed in `github.c` for exactly this), and `render.c` validates each
+sequence and drops what is not one — rejecting overlongs, surrogates and
+anything past U+10FFFF on the way. The cost of a clipped title is now one
+missing character in one row instead of an empty board.
+
+The general lesson is worth keeping: the per-module tests could not see this,
+because render's output looked correct and gist's input was always well-formed.
+`tests/test_pipeline.c` exists to test the seam in the direction data actually
+travels — truncate the way a caller does, render, then encode.
+
+### What the phone gets
+
+```
+Title:    3 new, 9 open: [tenstorrent/tt-metal] bf16 matmul NaN on RDNA4
+Priority: 5
+Click:    https://gist.github.com/<GIST_ID>
+```
+
+Counts first, because that is what is legible on a lock screen. The title goes
+through the same ASCII sanitiser as every other header — emoji folded to a
+space — while the Markdown body keeps them. That is the rule 5 split: headers
+are ASCII, bodies are not.
+
+A cycle that found nothing new sends no push at all. The board is still
+republished, so ages and claimed-bounty drops stay current without a buzz.
+
+### The 404 you will hit first
+
+Gists need a classic token with `gist` scope; a fine-grained PAT cannot grant
+it. Without the scope the PATCH returns a bare `404` that reads exactly like a
+wrong gist id. `http.c` therefore captures `X-OAuth-Scopes` and the failure path
+prints the scopes the token actually presents, so the message names the real
+problem instead of sending you to check the id.
