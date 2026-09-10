@@ -1,0 +1,24 @@
+[Unit]
+Description=issuewatch - poll GitHub issues, judge with an LLM, push to ntfy
+Documentation=file:%h/Search_engine/CONTEXT.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Mode 0600. Holds GH_TOKEN, and ANTHROPIC_API_KEY when JUDGE_MODE is not local.
+EnvironmentFile=%h/.config/issuewatch/env
+# Ollama drops the model from VRAM after this idle window. Polls are hours
+# apart, so VRAM sits at 0 for ~99% of wall time.
+Environment=OLLAMA_KEEP_ALIVE=2m
+ExecStart=%h/Search_engine/issuewatch --oneshot
+
+# The process needs the network, its own state dir, and nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%S/issuewatch
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M

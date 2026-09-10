@@ -1,0 +1,14 @@
+[Unit]
+Description=Run issuewatch every ~3 hours
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3h
+# Spread the load so every install does not hit the API on the same second.
+RandomizedDelaySec=10min
+# Catch up a run missed while the laptop was asleep. A sleep() loop cannot.
+Persistent=true
+Unit=issuewatch.service
+
+[Install]
+WantedBy=timers.target
