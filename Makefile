@@ -43,7 +43,15 @@ debug: $(BIN) $(TEST_BINS)
 # worse, succeeds quietly for our own objects. Rewriting the stamp whenever the
 # flags change makes every object depend on the flags that produced it.
 #
-BUILD_ID := $(CC)|$(STD)|$(CFLAGS)|$(WARN)|$(CPPFLAGS)
+#
+# Recursively expanded (=, not :=) on purpose. A simply-expanded BUILD_ID is
+# evaluated once at parse time using the GLOBAL CFLAGS, so the target-specific
+# CFLAGS that `debug` and `test` set would never reach it, the stamp would be
+# identical in every mode, and nothing would ever rebuild -- which is precisely
+# the bug this stamp exists to prevent. Deferring expansion lets the value be
+# computed inside the recipe, where target-specific flags are in effect.
+#
+BUILD_ID = $(CC)|$(STD)|$(CFLAGS)|$(WARN)|$(CPPFLAGS)
 
 .PHONY: FORCE
 FORCE:
