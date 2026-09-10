@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "config.h"
+#include "core/fileio.h"
 #include "core/util.h"
 
 /*
@@ -35,15 +36,6 @@
 
 /* A valid line always fits; anything longer is garbage by definition. */
 #define ETAGS_LINE_MAX (STATE_REPO_MAX + HTTP_ETAG_MAX + 64)
-
-static int path_join(char *out, size_t outlen, const char *dir, const char *name)
-{
-    int n = snprintf(out, outlen, "%s/%s", dir, name);
-
-    if (n < 0 || (size_t)n >= outlen)
-        return -ENAMETOOLONG;
-    return 0;
-}
 
 static int resolve_dir(char *out, size_t outlen)
 {
@@ -119,7 +111,7 @@ static void load_etags(state_t *st)
     FILE *f;
     unsigned long lineno = 0;
 
-    if (path_join(path, sizeof path, st->dir, ETAGS_NAME) != 0)
+    if (fileio_path_join(path, sizeof path, st->dir, ETAGS_NAME) != 0)
         return;
 
     f = fopen(path, "r");
@@ -199,7 +191,7 @@ static int seen_open(state_t *st)
     void *m;
     int fd, rc;
 
-    rc = path_join(path, sizeof path, st->dir, SEEN_NAME);
+    rc = fileio_path_join(path, sizeof path, st->dir, SEEN_NAME);
     if (rc != 0)
         return rc;
 
@@ -291,13 +283,23 @@ out:
     return rc;
 }
 
+static int emit_etags(FILE *f, void *user)
+{
+    const state_t *st = user;
+    size_t i;
+
+    for (i = 0; i < st->n_repos; i++) {
+        if (fprintf(f, "%s\t%s\t%s\n", st->repos[i].repo, st->repos[i].etag,
+                    st->repos[i].watermark) < 0)
+            return -EIO;
+    }
+    return 0;
+}
+
 int state_flush(state_t *st)
 {
-    char final_path[STATE_PATH_MAX];
-    char tmp_path[STATE_PATH_MAX];
-    FILE *f = NULL;
     size_t i;
-    int fd = -1, dir_fd, rc = 0, dirty = 0;
+    int rc, dirty = 0;
 
     if (st == NULL || st->repos == NULL)
         return -EINVAL;
@@ -309,72 +311,13 @@ int state_flush(state_t *st)
     if (!dirty)
         return 0;
 
-    rc = path_join(final_path, sizeof final_path, st->dir, ETAGS_NAME);
+    rc = fileio_atomic_write(st->dir, ETAGS_NAME, ETAGS_TMP_NAME, emit_etags, st);
     if (rc != 0)
         return rc;
-    rc = path_join(tmp_path, sizeof tmp_path, st->dir, ETAGS_TMP_NAME);
-    if (rc != 0)
-        return rc;
-
-    /* Temp file in the same directory so rename(2) is atomic. */
-    fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
-    if (fd < 0)
-        return -errno;
-
-    f = fdopen(fd, "w");
-    if (f == NULL) {
-        rc = -errno;
-        close(fd);
-        goto out;
-    }
-
-    for (i = 0; i < st->n_repos; i++) {
-        if (fprintf(f, "%s\t%s\t%s\n", st->repos[i].repo, st->repos[i].etag,
-                    st->repos[i].watermark) < 0) {
-            rc = -EIO;
-            goto out;
-        }
-    }
-
-    /* fflush before fsync: a short write buffered in stdio would otherwise be
-     * fsync'd as a truncated file and then renamed over a good one. */
-    if (fflush(f) != 0 || ferror(f)) {
-        rc = -EIO;
-        goto out;
-    }
-    if (fsync(fd) != 0) {
-        rc = -errno;
-        goto out;
-    }
-    if (fclose(f) != 0) {
-        f = NULL;
-        rc = -EIO;
-        goto out;
-    }
-    f = NULL;
-
-    if (rename(tmp_path, final_path) != 0) {
-        rc = -errno;
-        goto out;
-    }
-
-    /* The rename itself only becomes durable once the directory is synced. */
-    dir_fd = open(st->dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (dir_fd >= 0) {
-        if (fsync(dir_fd) != 0)
-            LOGW("state: fsync on %s failed: %s", st->dir, strerror(errno));
-        close(dir_fd);
-    }
 
     for (i = 0; i < st->n_repos; i++)
         st->repos[i].dirty = 0;
-
-out:
-    if (f != NULL)
-        fclose(f);
-    if (rc != 0)
-        unlink(tmp_path);
-    return rc;
+    return 0;
 }
 
 int state_close(state_t *st)

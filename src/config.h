@@ -196,6 +196,44 @@ static const kw_t KEYWORDS[] = {
 #define NOTIFY_MAX_PER_CYCLE   10
 #define NOTIFY_ON_UPDATE       0
 #define NOTIFY_TIMEOUT_SEC     20
+/*
+ * 1: one summary push per cycle whose Click: opens the board, which is the
+ * point of the board -- ten pushes a cycle, eight cycles a day, is the noise
+ * this replaces. 0: the old behaviour, one push per issue up to
+ * NOTIFY_MAX_PER_CYCLE, which is still what you want if you never set up a gist.
+ */
+#define NOTIFY_SUMMARY_ONLY    1
+
+/* ---- ranked board ---- */
+/*
+ * The board is published as a secret GitHub Gist: it reuses GH_TOKEN and
+ * net/http.c, adds no dependency and nothing to host. Cost is that the token
+ * needs `gist` scope on top of public-repo read -- a fine-grained PAT will not
+ * do, gists need a classic token with the gist scope. Create the gist once
+ * (any content), then paste its id here:
+ *
+ *     gh gist create --secret -d issuewatch board.md
+ *
+ * GIST_ID is the hex id from the URL, not the whole URL.
+ */
+#define GIST_ID                "REPLACE_ME_WITH_GIST_ID"
+#define GIST_API_BASE          "https://api.github.com/gists"
+#define GIST_WEB_BASE          "https://gist.github.com"
+#define GIST_FILENAME          "issuewatch-board.md"
+#define GIST_TIMEOUT_SEC       30
+
+/*
+ * Entries are a fixed calloc made once at startup (~700 B each, so 200 is
+ * ~140 KB resident for the life of the process). On overflow the lowest
+ * llm_score goes first, oldest first_seen breaking the tie.
+ */
+#define BOARD_MAX              200
+/*
+ * Safety net only. An entry should leave the board because GitHub says it is
+ * closed or assigned; this drops one whose re-check has somehow never resolved,
+ * so a repo that stops answering cannot pin a stale row there forever.
+ */
+#define BOARD_STALE_DAYS       30
 
 /* ---- github ---- */
 #define GH_API_BASE            "https://api.github.com"
