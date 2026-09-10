@@ -9,10 +9,10 @@
 
 #include "../tests/test_util.h"
 
-#include "arena.h"
+#include "core/arena.h"
 #include "config.h"
-#include "github.h"
-#include "judge.h"
+#include "net/github.h"
+#include "pipeline/judge.h"
 
 /*
  * Not in judge.h -- that header is a frozen contract. judge.c exports the two

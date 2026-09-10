@@ -96,19 +96,34 @@ Ranked by actual impact:
 
 ## Layout
 
+Sources are grouped by role. Includes are path-qualified from `src/`, so
+`#include "net/github.h"` tells you which group a dependency comes from.
+
 ```
 src/
-  main.c        argv, mode dispatch, signals, cycle orchestration
-  config.h      ALL tunables. The only file you edit.
-  arena.c/h     bump allocator, reset once per cycle
-  util.c/h      logging, RFC3339, hashing, ASCII sanitising
-  http.c/h      curl_multi wrapper: HTTP/2, gzip, rate-limit headers
-  github.c/h    issue fetch, ETag cache, watermark, pagination, PR filter
-  prefilter.c/h hand-written Aho-Corasick build + weighted score
-  judge.c/h     LLM batching; three backends behind judge_batch()
-  notify.c/h    ntfy POST, ASCII header sanitising, per-cycle cap
-  state.c/h     mmap'd seen-set, atomic etag/watermark rewrite
+  main.c          argv, mode dispatch, signals, cycle orchestration
+  config.h        ALL tunables. The only file you edit.
+
+  core/           no network, no policy -- memory and durability
+    arena.c/h     bump allocator, reset once per cycle
+    util.c/h      logging, RFC3339, hashing, ASCII sanitising
+    state.c/h     mmap'd seen-set, atomic etag/watermark rewrite
+
+  net/            everything that speaks HTTP
+    http.c/h      curl_multi wrapper: HTTP/2, gzip, rate-limit headers
+    github.c/h    issue fetch, ETag cache, watermark, pagination, PR filter
+    notify.c/h    ntfy POST, ASCII header sanitising, per-cycle cap
+
+  pipeline/       decides which issues are worth your attention
+    prefilter.c/h hand-written Aho-Corasick build + weighted score
+    judge.c/h     LLM batching; three backends behind judge_batch()
+
 third_party/yyjson/
-tests/          plain assertions, recorded JSON fixtures, no framework
-systemd/        user service + timer
+tests/            plain assertions, recorded JSON fixtures, no framework
+systemd/          user service + timer
+build/            all objects, dep files and test binaries (gitignored)
 ```
+
+`build/` mirrors the source tree: `src/net/http.c` compiles to
+`build/src/net/http.o`, and test binaries land in `build/tests/`. `make clean`
+is just `rm -r build`.

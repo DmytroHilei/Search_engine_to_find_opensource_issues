@@ -12,10 +12,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "arena.h"
+#include "core/arena.h"
 #include "config.h"
-#include "github.h"
-#include "prefilter.h"
+#include "net/github.h"
+#include "pipeline/prefilter.h"
 
 #include "../tests/test_util.h"
 

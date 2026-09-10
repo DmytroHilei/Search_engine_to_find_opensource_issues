@@ -8,9 +8,9 @@
 
 #include "../tests/test_util.h"
 
-#include "arena.h"
+#include "core/arena.h"
 #include "config.h"
-#include "github.h"
+#include "net/github.h"
 
 #define TEST_ARENA (2u << 20)
 

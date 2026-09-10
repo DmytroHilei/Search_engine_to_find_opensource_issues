@@ -10,8 +10,8 @@
 
 #include "../tests/test_util.h"
 
-#include "arena.h"
-#include "http.h"
+#include "core/arena.h"
+#include "net/http.h"
 
 #define GH_LINK \
     "<https://api.github.com/repositories/1300192/issues?page=2>; rel=\"next\", " \

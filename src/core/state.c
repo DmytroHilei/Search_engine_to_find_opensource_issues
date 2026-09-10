@@ -1,4 +1,4 @@
-#include "state.h"
+#include "core/state.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #include "config.h"
-#include "util.h"
+#include "core/util.h"
 
 /*
  * Persistence: a text `etags` file rewritten atomically, and a fixed-size

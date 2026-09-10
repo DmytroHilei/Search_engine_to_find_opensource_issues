@@ -15,7 +15,7 @@
  */
 #define CONFIG_WANT_KEYWORDS
 
-#include "prefilter.h"
+#include "pipeline/prefilter.h"
 
 #include <errno.h>
 #include <stddef.h>

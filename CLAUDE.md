@@ -36,25 +36,41 @@ judgement call.
 | libcurl (≥ 7.62, needs `curl_multi_poll`) | HTTP | system, `pkg-config libcurl` |
 | yyjson | JSON parse + build | vendored in `third_party/yyjson/`, 2 files |
 
-Aho–Corasick is written by hand in `src/prefilter.c`. Do not pull in a
+Aho–Corasick is written by hand in `src/pipeline/prefilter.c`. Do not pull in a
 matching library for ~200 patterns.
 
 ## Layout
 
 ```
 src/
-  main.c        argv, mode dispatch (--oneshot | --daemon | --dry-run), signals
-  config.h      ALL tunables. The only file the user edits.
-  arena.c/h     bump allocator
-  http.c/h      curl_multi wrapper, gzip, HTTP/2 multiplex, rate-limit headers
-  github.c/h    issue fetch, ETag cache, since-watermark, pagination, PR filter
-  prefilter.c/h Aho-Corasick build + score
-  judge.c/h     LLM batching; backends behind one `judge_batch()` interface
-  notify.c/h    ntfy POST, header sanitising, per-cycle cap
-  state.c/h     mmap seen-set, atomic etag/watermark file rewrite
+  main.c          argv, mode dispatch (--oneshot | --daemon | --dry-run), signals
+  config.h        ALL tunables. The only file the user edits.
+  core/           memory and durability; no network, no policy
+    arena.c/h     bump allocator
+    util.c/h      logging, RFC3339, hashing, ASCII sanitising
+    state.c/h     mmap seen-set, atomic etag/watermark file rewrite
+  net/            everything that speaks HTTP
+    http.c/h      curl_multi wrapper, gzip, HTTP/2 multiplex, rate-limit headers
+    github.c/h    issue fetch, ETag cache, since-watermark, pagination, PR filter
+    notify.c/h    ntfy POST, header sanitising, per-cycle cap
+  pipeline/       what is worth reporting
+    prefilter.c/h Aho-Corasick build + score
+    judge.c/h     LLM batching; backends behind one `judge_batch()` interface
 third_party/yyjson/
+build/            every .o, .d and test binary, mirroring the source tree
 Makefile
 ```
+
+Includes are path-qualified from `src/` (`-Isrc`): write
+`#include "net/http.h"`, not `#include "http.h"`. A new file goes in the group
+whose description already covers it; adding a fourth group is a design change,
+so ask first. Dependencies point `pipeline/` → `net/` → `core/`; do not make
+`core/` include from `net/` or `pipeline/`.
+
+Nothing is ever written into `src/` or `tests/` by the build. Objects go to
+`build/src/...`, test binaries to `build/tests/`, the flags stamp to
+`build/.buildflags`. If you add a build rule, `mkdir -p $(@D)` in the recipe
+rather than committing a placeholder directory.
 
 ## Build
 

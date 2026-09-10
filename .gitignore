@@ -1,10 +1,8 @@
 issuewatch
-*.o
-*.d
-.buildflags
-tests/test_*
-!tests/test_*.c
-!tests/test_util.h
+
+# All build products (objects, dep files, test binaries, the flags stamp) are
+# mirrored under build/. Nothing is written into src/ or tests/ any more.
+build/
 
 # Per-machine tool settings, not project config.
 .claude/settings.local.json

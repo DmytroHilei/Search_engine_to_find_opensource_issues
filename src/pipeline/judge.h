@@ -3,8 +3,8 @@
 
 #include <stddef.h>
 
-#include "arena.h"
-#include "github.h"
+#include "core/arena.h"
+#include "net/github.h"
 
 /*
  * LLM scoring. One backend is selected at compile time by JUDGE_MODE; all of

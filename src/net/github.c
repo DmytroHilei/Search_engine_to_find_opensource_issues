@@ -1,4 +1,4 @@
-#include "github.h"
+#include "net/github.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -7,8 +7,8 @@
 #include "yyjson.h"
 
 #include "config.h"
-#include "http.h"
-#include "util.h"
+#include "net/http.h"
+#include "core/util.h"
 
 /*
  * GitHub issue fetch.

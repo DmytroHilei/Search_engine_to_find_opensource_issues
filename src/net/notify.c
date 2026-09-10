@@ -1,12 +1,12 @@
-#include "notify.h"
+#include "net/notify.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "config.h"
-#include "http.h"
-#include "util.h"
+#include "net/http.h"
+#include "core/util.h"
 
 /*
  * ntfy push.

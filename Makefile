@@ -15,17 +15,26 @@ CURL_CFLAGS := $(shell pkg-config --cflags libcurl)
 CURL_LIBS   := $(shell pkg-config --libs libcurl)
 
 BIN      = issuewatch
-SRCS     = $(sort $(wildcard src/*.c))
-OBJS     = $(SRCS:.c=.o)
-# Every test binary links the whole program except its entry point.
-LIB_OBJS = $(filter-out src/main.o,$(OBJS))
+# Build products stay out of the source tree: every .o, .d and test binary is
+# mirrored under build/ at the same relative path as its source.
+BUILD    = build
 
-YYJSON_OBJ = third_party/yyjson/yyjson.o
+# src/ is grouped by role -- core/ (arena, util, state), net/ (http, github,
+# notify) and pipeline/ (prefilter, judge) -- so the wildcard is one level deep.
+SRCS     = $(sort $(wildcard src/*.c src/*/*.c))
+OBJS     = $(SRCS:%.c=$(BUILD)/%.o)
+# Every test binary links the whole program except its entry point.
+LIB_OBJS = $(filter-out $(BUILD)/src/main.o,$(OBJS))
+
+YYJSON_SRC = third_party/yyjson/yyjson.c
+YYJSON_OBJ = $(YYJSON_SRC:%.c=$(BUILD)/%.o)
 
 TEST_SRCS = $(sort $(wildcard tests/test_*.c))
-TEST_BINS = $(TEST_SRCS:.c=)
+TEST_BINS = $(TEST_SRCS:%.c=$(BUILD)/%)
 
-DEPS = $(SRCS:.c=.d) $(TEST_SRCS:.c=.d)
+DEPS = $(OBJS:.o=.d) $(TEST_BINS:%=%.d)
+
+STAMP = $(BUILD)/.buildflags
 
 .PHONY: all debug run test clean
 .DEFAULT_GOAL := all
@@ -56,7 +65,8 @@ BUILD_ID = $(CC)|$(STD)|$(CFLAGS)|$(WARN)|$(CPPFLAGS)
 .PHONY: FORCE
 FORCE:
 
-.buildflags: FORCE
+$(STAMP): FORCE
+	@mkdir -p $(@D)
 	@if [ ! -f $@ ] || [ "$$(cat $@)" != '$(BUILD_ID)' ]; then \
 	    printf '%s' '$(BUILD_ID)' > $@; \
 	fi
@@ -64,14 +74,19 @@ FORCE:
 $(BIN): $(OBJS) $(YYJSON_OBJ)
 	$(CC) $(STD) $(CFLAGS) $(WARN) -o $@ $^ $(CURL_LIBS) $(LDLIBS)
 
-src/%.o: src/%.c .buildflags
+# One pattern rule covers src/*.c and src/*/*.c alike; $(@D) is the mirrored
+# build/ directory, which need not exist yet.
+$(BUILD)/src/%.o: src/%.c $(STAMP)
+	@mkdir -p $(@D)
 	$(CC) $(STD) $(CFLAGS) $(WARN) $(CPPFLAGS) $(CURL_CFLAGS) -MMD -MP -c -o $@ $<
 
 # Third-party: compiled without -Wpedantic/-Werror. We do not patch yyjson.
-$(YYJSON_OBJ): third_party/yyjson/yyjson.c .buildflags
+$(YYJSON_OBJ): $(YYJSON_SRC) $(STAMP)
+	@mkdir -p $(@D)
 	$(CC) $(STD) $(CFLAGS) -w $(CPPFLAGS) -c -o $@ $<
 
-tests/test_%: tests/test_%.c $(LIB_OBJS) $(YYJSON_OBJ) .buildflags
+$(BUILD)/tests/test_%: tests/test_%.c $(LIB_OBJS) $(YYJSON_OBJ) $(STAMP)
+	@mkdir -p $(@D)
 	$(CC) $(STD) $(CFLAGS) $(WARN) $(CPPFLAGS) $(CURL_CFLAGS) -MMD -MP \
 	    -o $@ $< $(LIB_OBJS) $(YYJSON_OBJ) $(CURL_LIBS) $(LDLIBS)
 
@@ -99,7 +114,8 @@ run: $(BIN)
 
 .PHONY: clean-obj
 clean-obj:
-	@$(RM) $(OBJS) $(YYJSON_OBJ) $(DEPS) $(TEST_BINS) $(BIN) .buildflags
+	@$(RM) -r $(BUILD)
+	@$(RM) $(BIN)
 
 clean: clean-obj
 

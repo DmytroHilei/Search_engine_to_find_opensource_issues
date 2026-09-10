@@ -1,4 +1,4 @@
-#include "http.h"
+#include "net/http.h"
 
 #include <errno.h>
 #include <stddef.h>
@@ -6,8 +6,8 @@
 
 #include <curl/curl.h>
 
-#include "arena.h"
-#include "util.h"
+#include "core/arena.h"
+#include "core/util.h"
 
 /*
  * One CURLM per batch, HTTP/2 multiplexed over a single connection per host.

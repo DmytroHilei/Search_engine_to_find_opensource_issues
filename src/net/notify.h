@@ -3,9 +3,9 @@
 
 #include <stddef.h>
 
-#include "arena.h"
-#include "github.h"
-#include "state.h"
+#include "core/arena.h"
+#include "net/github.h"
+#include "core/state.h"
 
 /*
  * ntfy push. Headers must be pure ASCII -- GitHub titles carry emoji and CJK

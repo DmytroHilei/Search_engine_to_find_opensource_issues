@@ -6,8 +6,8 @@
 #include <unistd.h>
 
 #include "config.h"
-#include "state.h"
-#include "util.h"
+#include "core/state.h"
+#include "core/util.h"
 
 #include "../tests/test_util.h"
 

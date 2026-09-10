@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-#include "arena.h"
+#include "core/arena.h"
 
 /*
  * curl_multi wrapper. All response memory is arena-allocated, so a cycle's

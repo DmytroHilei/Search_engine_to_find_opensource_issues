@@ -3,8 +3,8 @@
 
 #include <stddef.h>
 
-#include "arena.h"
-#include "state.h"
+#include "core/arena.h"
+#include "core/state.h"
 
 #define GH_MAX_LABELS 16
 

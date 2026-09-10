@@ -13,11 +13,11 @@
 
 #include "../tests/test_util.h"
 
-#include "arena.h"
+#include "core/arena.h"
 #include "config.h"
-#include "github.h"
-#include "notify.h"
-#include "state.h"
+#include "net/github.h"
+#include "net/notify.h"
+#include "core/state.h"
 
 /* Both are exported by notify.c and deliberately absent from notify.h. */
 extern unsigned long notify_http_calls;

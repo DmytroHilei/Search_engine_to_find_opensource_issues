@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "arena.h"
+#include "core/arena.h"
 
 #include "../tests/test_util.h"
 

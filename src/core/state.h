@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "http.h"
+#include "net/http.h"
 
 /*
  * Two files under $XDG_STATE_HOME/issuewatch/ (falling back to ~/.local/state):

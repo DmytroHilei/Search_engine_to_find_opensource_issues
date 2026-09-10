@@ -3,8 +3,8 @@
 
 #include <stddef.h>
 
-#include "arena.h"
-#include "github.h"
+#include "core/arena.h"
+#include "net/github.h"
 
 /*
  * Hand-written Aho-Corasick over the static KEYWORDS[] table. Built once at

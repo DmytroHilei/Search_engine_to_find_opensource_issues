@@ -9,15 +9,15 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "arena.h"
+#include "core/arena.h"
 #include "config.h"
-#include "github.h"
-#include "http.h"
-#include "judge.h"
-#include "notify.h"
-#include "prefilter.h"
-#include "state.h"
-#include "util.h"
+#include "net/github.h"
+#include "net/http.h"
+#include "pipeline/judge.h"
+#include "net/notify.h"
+#include "pipeline/prefilter.h"
+#include "core/state.h"
+#include "core/util.h"
 
 typedef enum { MODE_ONESHOT, MODE_DAEMON } run_mode_t;
 
