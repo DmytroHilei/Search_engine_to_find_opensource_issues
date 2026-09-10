@@ -117,6 +117,7 @@ static void hdr_reset(xfer_t *x)
 {
     x->resp->etag[0] = '\0';
     x->resp->link[0] = '\0';
+    x->resp->oauth_scopes[0] = '\0';
     x->resp->retry_after = -1;
     x->resp->rl_remaining = -1;
     x->resp->rl_reset = -1;
@@ -228,6 +229,10 @@ static size_t on_header(char *buf, size_t size, size_t nitems, void *ud)
         bounded_copy(x->resp->etag, sizeof x->resp->etag, v, vlen);
     else if (hdr_value(buf, n, "Link", &v, &vlen))
         bounded_copy(x->resp->link, sizeof x->resp->link, v, vlen);
+    /* hdr_value() anchors at the start of the line, so GitHub's similarly named
+     * X-Accepted-OAuth-Scopes cannot land here by accident. */
+    else if (hdr_value(buf, n, "X-OAuth-Scopes", &v, &vlen))
+        bounded_copy(x->resp->oauth_scopes, sizeof x->resp->oauth_scopes, v, vlen);
     else if (hdr_value(buf, n, "Retry-After", &v, &vlen))
         x->resp->retry_after = parse_long(v, vlen);
     else if (hdr_value(buf, n, "X-RateLimit-Remaining", &v, &vlen))

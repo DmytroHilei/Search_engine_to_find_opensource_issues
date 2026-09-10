@@ -12,6 +12,7 @@
 
 #define HTTP_ETAG_MAX 128
 #define HTTP_LINK_MAX 1024
+#define HTTP_SCOPES_MAX 256
 
 typedef struct {
     const char *url;
@@ -29,6 +30,13 @@ typedef struct {
     size_t body_len;
     char etag[HTTP_ETAG_MAX];     /* response ETag, "" when absent */
     char link[HTTP_LINK_MAX];     /* raw Link header, "" when absent */
+    /*
+     * X-OAuth-Scopes, "" when absent. GitHub answers a token that is missing a
+     * scope with an opaque 404 rather than a 403, so this is the only thing that
+     * lets a caller say "your token has [x], it needs [y]" instead of leaving
+     * the user to guess whether the id is wrong or the token is.
+     */
+    char oauth_scopes[HTTP_SCOPES_MAX];
     long retry_after;             /* seconds, -1 when absent */
     long rl_remaining;            /* X-RateLimit-Remaining, -1 when absent */
     long rl_reset;                /* X-RateLimit-Reset epoch, -1 when absent */
