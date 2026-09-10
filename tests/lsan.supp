@@ -1,0 +1,11 @@
+# LeakSanitizer suppressions.
+#
+# Nothing here may suppress a leak in our own code. The one entry is a
+# third-party allocation made before main() runs:
+#
+# libp11-kit's ELF constructor calls __newlocale, which never frees its argz
+# buffer. It is reached through the dynamic loader merely by LINKING against
+# libcurl -- an empty `int main(void){return 0;}` reproduces it with no curl
+# call at all. Without this, every sanitizer test binary exits 1 regardless of
+# whether its assertions passed.
+leak:libp11-kit
