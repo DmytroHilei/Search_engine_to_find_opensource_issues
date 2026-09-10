@@ -1,0 +1,80 @@
+[
+  {
+    "id": 3101,
+    "number": 900,
+    "title": "cuda: fuse the epilogue into the GEMM kernel",
+    "body": "Depends on #899.",
+    "html_url": "https://github.com/NVIDIA/cutlass/pull/900",
+    "state": "open",
+    "updated_at": "2026-09-10T09:00:00Z",
+    "comments": 12,
+    "user": { "login": "dave" },
+    "labels": [
+      { "name": "performance" }
+    ],
+    "pull_request": {
+      "url": "https://api.github.com/repos/NVIDIA/cutlass/pulls/900",
+      "html_url": "https://github.com/NVIDIA/cutlass/pull/900",
+      "diff_url": "https://github.com/NVIDIA/cutlass/pull/900.diff",
+      "patch_url": "https://github.com/NVIDIA/cutlass/pull/900.patch",
+      "merged_at": null
+    }
+  },
+  {
+    "id": 3102,
+    "number": 899,
+    "title": "Race condition in the scheduler when two streams share a tile",
+    "body": "Reproduces under compute-sanitizer --tool racecheck about 1 run in 20.",
+    "html_url": "https://github.com/NVIDIA/cutlass/issues/899",
+    "state": "open",
+    "updated_at": "2026-09-10T08:30:00Z",
+    "comments": 4,
+    "user": { "login": "erin" },
+    "labels": [
+      { "name": "bug" },
+      { "name": "cuda" }
+    ]
+  },
+  {
+    "id": 3103,
+    "number": 898,
+    "title": "docs: fix a typo in the quickstart",
+    "body": "Trivial.",
+    "html_url": "https://github.com/NVIDIA/cutlass/pull/898",
+    "state": "open",
+    "updated_at": "2026-09-10T07:15:00Z",
+    "comments": 0,
+    "user": { "login": "dependabot[bot]" },
+    "labels": [],
+    "pull_request": null
+  },
+  {
+    "id": 3104,
+    "number": 897,
+    "title": "Segfault when compiling with -O3 and --expt-relaxed-constexpr",
+    "body": "nvcc 12.6 ICEs. Minimal reproducer inline.",
+    "html_url": "https://github.com/NVIDIA/cutlass/issues/897",
+    "state": "open",
+    "updated_at": "2026-09-09T22:00:00Z",
+    "comments": 1,
+    "user": { "login": "frank" },
+    "labels": [
+      { "name": "build" }
+    ]
+  },
+  {
+    "id": 3105,
+    "number": 896,
+    "title": "Undefined behavior in the ring buffer index arithmetic",
+    "body": "UBSan: signed integer overflow in ring.h:88.",
+    "html_url": "https://github.com/NVIDIA/cutlass/issues/896",
+    "state": "open",
+    "updated_at": "2026-09-09T20:44:10Z",
+    "comments": 2,
+    "user": { "login": "grace" },
+    "labels": [
+      { "name": "undefined behavior" },
+      { "name": "help wanted" }
+    ]
+  }
+]

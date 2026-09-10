@@ -1,0 +1,127 @@
+[
+  {
+    "id": 4001,
+    "number": 10,
+    "title": "🔥 CUDA カーネル segfault on sm_90 — 中文测试",
+    "body": null,
+    "html_url": "https://github.com/triton-lang/triton/issues/10",
+    "state": "open",
+    "updated_at": "2026-09-10T12:00:00Z",
+    "comments": 2,
+    "user": {
+      "login": "hana"
+    },
+    "labels": [
+      {
+        "name": "cuda"
+      },
+      {
+        "name": "performance"
+      },
+      {
+        "name": "label-03"
+      },
+      {
+        "name": "label-04"
+      },
+      {
+        "name": "label-05"
+      },
+      {
+        "name": "label-06"
+      },
+      {
+        "name": "label-07"
+      },
+      {
+        "name": "label-08"
+      },
+      {
+        "name": "label-09"
+      },
+      {
+        "name": "label-10"
+      },
+      {
+        "name": "label-11"
+      },
+      {
+        "name": "label-12"
+      },
+      {
+        "name": "label-13"
+      },
+      {
+        "name": "label-14"
+      },
+      {
+        "name": "label-15"
+      },
+      {
+        "name": "label-16"
+      },
+      {
+        "name": "label-17"
+      },
+      {
+        "name": "label-18"
+      },
+      {
+        "name": "label-19"
+      },
+      {
+        "name": "label-20"
+      }
+    ]
+  },
+  {
+    "id": 4002,
+    "number": 11,
+    "title": "He said \"use \\n\" and the parser exploded",
+    "body": "short",
+    "html_url": "https://github.com/triton-lang/triton/issues/11",
+    "state": "open",
+    "updated_at": "2026-09-10T11:00:00Z",
+    "comments": 0,
+    "user": {
+      "login": "ivan"
+    },
+    "labels": []
+  },
+  {
+    "id": 4003,
+    "number": 12,
+    "title": "Very long body: nvidia-smi dump pasted inline",
+    "body": "segfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\nsegfault at 0x7f00 in kernel_launch\n",
+    "html_url": "https://github.com/triton-lang/triton/issues/12",
+    "state": "open",
+    "updated_at": "2026-09-10T10:00:00Z",
+    "comments": 41,
+    "user": {
+      "login": "judy"
+    },
+    "labels": [
+      {
+        "name": "performance"
+      }
+    ]
+  },
+  {
+    "id": 4004,
+    "number": 13,
+    "title": "Kernel panic dump exceeds GH_BODY_MAX",
+    "body": "PANIC: ☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃☃",
+    "html_url": "https://github.com/triton-lang/triton/issues/13",
+    "state": "open",
+    "updated_at": "2026-09-10T09:30:00Z",
+    "comments": 3,
+    "user": {
+      "login": "karl"
+    },
+    "labels": [
+      {
+        "name": "bug"
+      }
+    ]
+  }
+]
