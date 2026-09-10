@@ -11,11 +11,14 @@
 
 #include "core/arena.h"
 #include "config.h"
+#include "core/board.h"
+#include "net/gist.h"
 #include "net/github.h"
 #include "net/http.h"
 #include "pipeline/judge.h"
 #include "net/notify.h"
 #include "pipeline/prefilter.h"
+#include "pipeline/render.h"
 #include "core/state.h"
 #include "core/util.h"
 
@@ -76,14 +79,54 @@ static int commit_cycle(state_t *st, int dry_run)
 }
 
 /*
+ * Turns this cycle's survivors into board entries and merges them in. Split out
+ * because a failed judge must not take the board phase down with it -- see
+ * run_cycle().
+ */
+static int merge_survivors(arena_t *cycle, state_t *st, board_t *board,
+                           const issue_t *issues, size_t judged, const char *now_iso,
+                           size_t *n_new)
+{
+    board_entry_t *cand;
+    size_t i;
+
+    if (judged == 0)
+        return 0;
+
+    cand = arena_calloc(cycle, judged, sizeof *cand);
+    if (cand == NULL) {
+        LOGE("arena exhausted building board candidates");
+        return -1;
+    }
+    for (i = 0; i < judged; i++)
+        gh_issue_to_board(&issues[i], &cand[i]);
+
+    return board_merge(board, st, cand, judged, now_iso, n_new);
+}
+
+/*
  * One poll cycle. Everything transient comes from `cycle`, which the caller
  * resets afterwards -- that reset is the only deallocation in the program.
+ *
+ * The board phase runs even when the fetch found nothing. A quiet cycle is
+ * exactly when the board is most likely to be wrong: no new issues arrived, but
+ * the ones already on it have aged, and some of them have been claimed by
+ * somebody else since the last look.
  */
-static int run_cycle(arena_t *cycle, state_t *st, const ac_t *ac, int dry_run)
+static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac,
+                     int dry_run)
 {
+    char now_iso[32];
     issue_t *issues = NULL;
-    size_t n = 0, kept, judged;
-    int sent;
+    const char *markdown;
+    time_t now = time(NULL);
+    size_t n = 0, kept = 0, judged = 0, n_new = 0, expired;
+    int sent, dropped, judge_failed = 0;
+
+    if (iso8601_format(now, now_iso, sizeof now_iso) != 0) {
+        LOGE("cannot format the current time");
+        return -1;
+    }
 
     if (gh_fetch_all(cycle, st, REPOS, N_REPOS, &issues, &n) != 0) {
         LOGE("fetch failed, abandoning cycle");
@@ -91,35 +134,84 @@ static int run_cycle(arena_t *cycle, state_t *st, const ac_t *ac, int dry_run)
     }
     LOGI("fetched %zu candidate issues", n);
 
-    if (n == 0) {
-        /* Nothing changed anywhere -- all 304s. Still commit, so the
-         * watermarks advance past a quiet interval. */
-        return commit_cycle(st, dry_run);
+    if (n > 0) {
+        kept = prefilter_apply(ac, issues, n);
+        LOGI("prefilter kept %zu/%zu", kept, n);
     }
 
-    kept = prefilter_apply(ac, issues, n);
-    LOGI("prefilter kept %zu/%zu", kept, n);
-    if (kept == 0)
-        return commit_cycle(st, dry_run);
+    if (kept > 0) {
+        if (judge_batch(cycle, issues, kept) != 0) {
+            /*
+             * Every batch failed: the model is down or unreachable. The
+             * watermark must not move -- these issues have to be re-judged next
+             * cycle -- but the board phase still runs. A judge that is down for
+             * a day would otherwise leave the board advertising bounties that
+             * were claimed hours ago, which is the exact failure it exists to
+             * prevent.
+             */
+            LOGE("judge failed for every batch, not advancing watermarks");
+            judge_failed = 1;
+        } else {
+            judged = judge_apply(issues, kept);
+            LOGI("judge kept %zu/%zu", judged, kept);
+        }
+    }
 
-    if (judge_batch(cycle, issues, kept) != 0) {
-        /* Every batch failed: the model is down or unreachable. Do NOT advance
-         * the watermark -- these issues must be re-judged next cycle. */
-        LOGE("judge failed for every batch, not advancing watermarks");
+    board_clear_fresh(board);
+    if (merge_survivors(cycle, st, board, issues, judged, now_iso, &n_new) < 0)
+        return -1;
+
+    /* The only thing in the program that can learn an issue was closed or
+     * claimed. Transport failures here keep entries, so a blip cannot empty
+     * the board. */
+    dropped = gh_recheck(cycle, board, st, dry_run);
+    if (dropped < 0) {
+        LOGE("re-check failed to run, not advancing watermarks");
+        return -1;
+    }
+    expired = board_expire(board, now);
+    board_rank(board);
+    LOGI("board: %zu open, %zu new, %d dropped, %zu expired", board->n, n_new,
+         dropped, expired);
+
+    markdown = render_board(cycle, board, now);
+    if (markdown == NULL) {
+        /* Never publish a truncated board: it would read as "these are all the
+         * open bounties", which is worse than yesterday's board. */
+        LOGE("render overflowed, skipping the publish");
         return -1;
     }
 
-    judged = judge_apply(issues, kept);
-    LOGI("judge kept %zu/%zu", judged, kept);
+    if (gist_publish(cycle, markdown, dry_run) < 0) {
+        LOGE("gist publish failed, not advancing watermarks");
+        return -1;
+    }
 
-    sent = notify_cycle(cycle, st, issues, judged, dry_run);
+    if (NOTIFY_SUMMARY_ONLY)
+        sent = notify_summary(cycle, board, n_new, dry_run);
+    else
+        sent = notify_cycle(cycle, st, issues, judged, dry_run);
     if (sent < 0) {
         LOGE("notify failed, not advancing watermarks");
         return -1;
     }
     LOGI("notified %d", sent);
 
-    /* Only now, after the whole cycle including notification succeeded, may the
+    if (!dry_run) {
+        int rc = board_flush(board);
+
+        if (rc != 0) {
+            LOGE("board flush failed: %s", strerror(-rc));
+            return -1;
+        }
+    }
+
+    /* A judge outage published a correct board but must still re-judge, so the
+     * watermark stays where it was. */
+    if (judge_failed)
+        return -1;
+
+    /* Only now, after the whole cycle including the publish succeeded, may the
      * watermarks and ETags move. A crash before this point re-processes; a
      * commit before this point would silently skip issues forever. */
     return commit_cycle(st, dry_run);
@@ -158,8 +250,9 @@ int main(int argc, char **argv)
     int rc = EXIT_FAILURE, cycle_rc;
     arena_t perm = {0}, cycle = {0};
     state_t st = {0};
+    board_t board = {0};
     ac_t *ac = NULL;
-    int state_ready = 0, http_ready = 0;
+    int state_ready = 0, http_ready = 0, board_ready = 0;
     int i;
 
     for (i = 1; i < argc; i++) {
@@ -208,6 +301,16 @@ int main(int argc, char **argv)
         LOGW("notify backend unusable, continuing because --dry-run");
     }
 
+    /* Same posture as notify_init(): a placeholder GIST_ID is fatal for a real
+     * run, because the board is the output, but --dry-run only prints it. */
+    if (gist_init() != 0) {
+        if (!dry_run) {
+            LOGE("board publishing unusable; set GIST_ID in config.h");
+            goto out;
+        }
+        LOGW("board publishing unusable, continuing because --dry-run");
+    }
+
     if (http_global_init() != 0) {
         LOGE("http_global_init failed");
         goto out;
@@ -225,11 +328,19 @@ int main(int argc, char **argv)
     }
     state_ready = 1;
 
+    /* Shares the state directory: board.tsv sits next to etags and seen.bin,
+     * and gets the same atomic-rewrite treatment. */
+    if (board_open(&board, st.dir) != 0) {
+        LOGE("board_open failed");
+        goto out;
+    }
+    board_ready = 1;
+
     LOGI("issuewatch starting: %zu repos, mode=%s%s", (size_t)N_REPOS,
          mode == MODE_DAEMON ? "daemon" : "oneshot", dry_run ? ", dry-run" : "");
 
     for (;;) {
-        cycle_rc = run_cycle(&cycle, &st, ac, dry_run);
+        cycle_rc = run_cycle(&cycle, &st, &board, ac, dry_run);
         /* Log after the reset: arena_reset is what folds `used` into `peak`,
          * so reading peak first reports the previous cycle's high-water mark. */
         arena_reset(&cycle);
@@ -271,6 +382,8 @@ int main(int argc, char **argv)
         LOGI("signal received, shutting down");
 
 out:
+    if (board_ready)
+        board_close(&board);
     if (state_ready)
         state_close(&st);
     if (http_ready)
