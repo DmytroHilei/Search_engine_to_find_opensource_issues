@@ -1,0 +1,14 @@
+issuewatch
+*.o
+*.d
+.buildflags
+tests/test_*
+!tests/test_*.c
+!tests/test_util.h
+
+# Per-machine tool settings, not project config.
+.claude/settings.local.json
+
+# Never commit a token. CLAUDE.md: no secrets in tracked files.
+env
+*.env
