@@ -1,0 +1,24 @@
+{
+  "id": 7001,
+  "number": 4242,
+  "html_url": "https://github.com/tenstorrent/tt-metal/issues/4242",
+  "user": {
+    "login": "carol"
+  },
+  "comments": 3,
+  "labels": [
+    {
+      "name": "bounty"
+    },
+    {
+      "name": "good first issue"
+    }
+  ],
+  "body": "bf16 matmul returns NaN on the second tile row.",
+  "state": "closed",
+  "title": "bf16 matmul NaN on the second tile row",
+  "updated_at": "2026-09-10T12:05:00Z",
+  "assignees": [],
+  "assignee": null,
+  "closed_at": "2026-09-10T12:05:00Z"
+}

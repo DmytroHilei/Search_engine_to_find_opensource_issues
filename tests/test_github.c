@@ -9,10 +9,20 @@
 #include "../tests/test_util.h"
 
 #include "core/arena.h"
+#include "core/board.h"
 #include "config.h"
 #include "net/github.h"
+#include "net/http.h"
 
 #define TEST_ARENA (2u << 20)
+
+/*
+ * The re-check drop table, deliberately absent from github.h. gh_recheck() as a
+ * whole needs a network and cannot run here, so the decision it makes per
+ * response is factored out and driven directly against recorded payloads --
+ * same precedent as notify_build_title() in notify.c.
+ */
+extern int gh_recheck_apply(const http_resp_t *r, board_entry_t *e);
 
 /* 0x5a canary so an out_cap overrun is visible rather than merely wrong. */
 static void poison(issue_t *buf, size_t n)
@@ -617,6 +627,426 @@ static void test_token_is_required(void)
     arena_destroy(&a);
 }
 
+/* ------------------------------------------------------- board conversion */
+
+/* A board entry as gh_recheck() would find it: on the board, not yet refreshed. */
+static void seed_entry(board_entry_t *e)
+{
+    memset(e, 0, sizeof *e);
+    e->id = 7001;
+    e->number = 4242;
+    e->llm_score = 8;
+    e->kw_score = 14;
+    memcpy(e->repo, "tenstorrent/tt-metal", sizeof "tenstorrent/tt-metal");
+    memcpy(e->first_seen, "2026-09-08T06:00:00Z", sizeof "2026-09-08T06:00:00Z");
+    memcpy(e->updated_at, "2026-09-09T10:00:00Z", sizeof "2026-09-09T10:00:00Z");
+    memcpy(e->etag, "W/\"deadbeef\"", sizeof "W/\"deadbeef\"");
+    memcpy(e->title, "bf16 matmul NaN", sizeof "bf16 matmul NaN");
+    memcpy(e->why, "unclaimed bounty", sizeof "unclaimed bounty");
+    memcpy(e->html_url, "https://github.com/tenstorrent/tt-metal/issues/4242",
+           sizeof "https://github.com/tenstorrent/tt-metal/issues/4242");
+}
+
+static void test_issue_to_board_carries_fields(void)
+{
+    board_entry_t e;
+    issue_t is;
+
+    memset(&is, 0, sizeof is);
+    is.id = 9100;
+    is.number = 77;
+    is.repo = "ggml-org/llama.cpp";
+    is.title = "CUDA kernel regression";
+    is.html_url = "https://github.com/ggml-org/llama.cpp/issues/77";
+    is.updated_at = "2026-09-10T08:00:00Z";
+    is.kw_score = 12;
+    is.llm_score = 7;
+    is.why = "open perf bug with a repro";
+    is.assigned = 1;
+
+    memset(&e, 0x5a, sizeof e);
+    gh_issue_to_board(&is, &e);
+
+    CHECK_EQ(e.id, 9100);
+    CHECK_EQ(e.number, 77);
+    CHECK_EQ(e.kw_score, 12);
+    CHECK_EQ(e.llm_score, 7);
+    CHECK_EQ(e.assigned, 1);
+    CHECK_STREQ(e.repo, "ggml-org/llama.cpp");
+    CHECK_STREQ(e.title, "CUDA kernel regression");
+    CHECK_STREQ(e.html_url, "https://github.com/ggml-org/llama.cpp/issues/77");
+    CHECK_STREQ(e.updated_at, "2026-09-10T08:00:00Z");
+    CHECK_STREQ(e.why, "open perf bug with a repro");
+
+    /* board_merge() owns first_seen, and the ETag only exists once a re-check
+     * has asked for the issue on its own. Both must be left empty here. */
+    CHECK_STREQ(e.first_seen, "");
+    CHECK_STREQ(e.etag, "");
+    CHECK_EQ(e.fresh, 0);
+
+    /* A NULL issue zeroes rather than scribbles, and NULL out must not fault. */
+    memset(&e, 0x5a, sizeof e);
+    gh_issue_to_board(NULL, &e);
+    CHECK_EQ(e.id, 0);
+    CHECK_STREQ(e.title, "");
+    gh_issue_to_board(&is, NULL);
+
+    /* A judge that never ran leaves why NULL; that must land as "", not a crash. */
+    is.why = NULL;
+    gh_issue_to_board(&is, &e);
+    CHECK_STREQ(e.why, "");
+}
+
+/*
+ * The bug this test exists for: a plain snprintf cut lands mid-character on a
+ * CJK or emoji title, gist.c hands the clipped byte to yyjson, yyjson refuses to
+ * encode invalid UTF-8, and one long title costs the whole cycle's publish.
+ */
+static void test_issue_to_board_truncates_on_utf8_boundaries(void)
+{
+    /* U+30AB (3 bytes), U+1F525 (4 bytes), U+00E9 (2 bytes). */
+    static const char *const chars[3] = { "\xe3\x82\xab", "\xf0\x9f\x94\xa5", "\xc3\xa9" };
+    static const int counts[3] = { 100, 80, 200 };
+    board_entry_t e;
+    issue_t is;
+    size_t ci;
+
+    for (ci = 0; ci < 3; ci++) {
+        size_t clen = strlen(chars[ci]);
+        size_t n = (size_t)counts[ci];
+        char *big = (char *)malloc(n * clen + 1);
+        size_t k, len;
+
+        CHECK(big != NULL);
+        if (big == NULL)
+            exit(2);
+        for (k = 0; k < n; k++)
+            memcpy(big + k * clen, chars[ci], clen);
+        big[n * clen] = '\0';
+        CHECK(n * clen > sizeof e.title);
+
+        memset(&is, 0, sizeof is);
+        is.id = 1;
+        is.repo = big;              /* every bounded field, not just the title */
+        is.title = big;
+        is.html_url = big;
+        is.why = big;
+        is.updated_at = big;
+
+        gh_issue_to_board(&is, &e);
+
+        len = strlen(e.title);
+        CHECK(len < sizeof e.title);
+        CHECK(utf8_is_valid(e.title, len));
+        /* At most one character is sacrificed to reach the boundary. */
+        CHECK(len + clen >= sizeof e.title);
+        /* Truncation only ever drops a tail: the head is byte-for-byte intact. */
+        CHECK_EQ(memcmp(e.title, big, len), 0);
+        CHECK_EQ(len % clen, 0);
+
+        CHECK(utf8_is_valid(e.repo, strlen(e.repo)));
+        CHECK(utf8_is_valid(e.html_url, strlen(e.html_url)));
+        CHECK(utf8_is_valid(e.why, strlen(e.why)));
+        CHECK(utf8_is_valid(e.updated_at, strlen(e.updated_at)));
+        CHECK(strlen(e.why) < sizeof e.why);
+        CHECK(strlen(e.html_url) < sizeof e.html_url);
+        CHECK(strlen(e.repo) < sizeof e.repo);
+
+        free(big);
+    }
+}
+
+/* ------------------------------------------------------ the re-check table */
+
+/* One recorded response. `body` stays owned by the caller. */
+static void resp_from(http_resp_t *r, long status, char *body, size_t len,
+                      const char *etag)
+{
+    memset(r, 0, sizeof *r);
+    r->status = status;
+    r->body = body;
+    r->body_len = len;
+    r->retry_after = -1;
+    r->rl_remaining = -1;
+    r->rl_reset = -1;
+    if (etag != NULL)
+        memcpy(r->etag, etag, strlen(etag) + 1);
+}
+
+/* Every keep path must leave the entry byte-for-byte as it was. */
+static int entry_unchanged(const board_entry_t *e)
+{
+    board_entry_t ref;
+
+    seed_entry(&ref);
+    return memcmp(e, &ref, sizeof ref) == 0;
+}
+
+static void test_recheck_keeps_on_304(void)
+{
+    board_entry_t e;
+    http_resp_t r;
+
+    seed_entry(&e);
+    /* A 304 carries no body at all, and costs no rate-limit unit. */
+    resp_from(&r, 304, NULL, 0, "W/\"deadbeef\"");
+    CHECK_EQ(gh_recheck_apply(&r, &e), 0);
+    CHECK(entry_unchanged(&e));
+}
+
+static void test_recheck_refreshes_on_200_open(void)
+{
+    board_entry_t e;
+    http_resp_t r;
+    char *json;
+    size_t len, tlen;
+
+    json = fixture_read("tests/fixtures/issue_one_open.json", &len);
+    seed_entry(&e);
+    resp_from(&r, 200, json, len, "W/\"cafef00d\"");
+
+    CHECK_EQ(gh_recheck_apply(&r, &e), 0);
+
+    CHECK_STREQ(e.updated_at, "2026-09-10T11:30:00Z");
+    CHECK_STREQ(e.etag, "W/\"cafef00d\"");
+    CHECK_EQ(e.assigned, 0);
+
+    /*
+     * A 333-byte emoji-and-CJK title into a 256-byte field. The cut has to land
+     * on a character boundary or the next publish is dropped whole.
+     */
+    tlen = strlen(e.title);
+    CHECK(tlen < sizeof e.title);
+    CHECK(utf8_is_valid(e.title, tlen));
+    CHECK_EQ(memcmp(e.title, "\xf0\x9f\x94\xa5 \xe3\x82\xab", 8), 0);
+
+    /* The judge owns the scores and first_seen is the row's age: untouched. */
+    CHECK_EQ(e.llm_score, 8);
+    CHECK_EQ(e.kw_score, 14);
+    CHECK_STREQ(e.first_seen, "2026-09-08T06:00:00Z");
+    CHECK_STREQ(e.repo, "tenstorrent/tt-metal");
+    CHECK_EQ(e.number, 4242);
+
+    free(json);
+}
+
+static void test_recheck_drops_closed_and_assigned(void)
+{
+    board_entry_t e;
+    http_resp_t r;
+    char *json;
+    size_t len;
+
+    /* Closed but unassigned -- nobody holds it, and it is still gone. */
+    json = fixture_read("tests/fixtures/issue_one_closed.json", &len);
+    seed_entry(&e);
+    resp_from(&r, 200, json, len, "W/\"newetag\"");
+    CHECK_EQ(gh_recheck_apply(&r, &e), 1);
+    CHECK_EQ(e.assigned, 0);
+    /* The caller turns updated_at into the seen-set key, so the drop path has to
+     * hand it the version GitHub just reported, not the stale one. */
+    CHECK_STREQ(e.updated_at, "2026-09-10T12:05:00Z");
+    /* Nothing else is worth refreshing on a row that is leaving. */
+    CHECK_STREQ(e.title, "bf16 matmul NaN");
+    CHECK_STREQ(e.etag, "W/\"deadbeef\"");
+    free(json);
+
+    /* Open but assigned -- the case the whole board exists to catch. */
+    json = fixture_read("tests/fixtures/issue_one_assigned.json", &len);
+    seed_entry(&e);
+    resp_from(&r, 200, json, len, "W/\"newetag\"");
+    CHECK_EQ(gh_recheck_apply(&r, &e), 1);
+    CHECK_EQ(e.assigned, 1);
+    CHECK_STREQ(e.updated_at, "2026-09-10T13:15:00Z");
+    free(json);
+}
+
+static void test_recheck_drops_on_404(void)
+{
+    board_entry_t e;
+    http_resp_t r;
+    const char *envelope = "{\"message\":\"Not Found\",\"status\":\"404\"}";
+
+    seed_entry(&e);
+    resp_from(&r, 404, (char *)envelope, strlen(envelope), NULL);
+    CHECK_EQ(gh_recheck_apply(&r, &e), 1);
+    /* Deleted or transferred; the error envelope is never parsed for state. */
+    CHECK_STREQ(e.updated_at, "2026-09-09T10:00:00Z");
+    CHECK_STREQ(e.title, "bf16 matmul NaN");
+}
+
+/*
+ * The rule that matters most in practice: a laptop that lost its network
+ * mid-cycle must not wake up and empty the whole board in one pass. The body
+ * here says "closed" precisely to prove it is never consulted on a status 0.
+ */
+static void test_recheck_keeps_on_transport_failure(void)
+{
+    board_entry_t e;
+    http_resp_t r;
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/issue_one_closed.json", &len);
+    seed_entry(&e);
+    resp_from(&r, 0, json, len, NULL);
+    r.curl_err = 28;                        /* CURLE_OPERATION_TIMEDOUT */
+    CHECK_EQ(gh_recheck_apply(&r, &e), 0);
+    CHECK(entry_unchanged(&e));
+
+    /* An empty-bodied timeout is the ordinary shape and must behave the same. */
+    seed_entry(&e);
+    resp_from(&r, 0, NULL, 0, NULL);
+    r.curl_err = 6;                         /* CURLE_COULDNT_RESOLVE_HOST */
+    CHECK_EQ(gh_recheck_apply(&r, &e), 0);
+    CHECK(entry_unchanged(&e));
+
+    free(json);
+}
+
+/* Anything without a clear verdict keeps the row: a wrong keep costs one
+ * conditional GET, a wrong drop deletes a live bounty. */
+static void test_recheck_keeps_on_other_statuses(void)
+{
+    static const long statuses[] = { 301, 401, 403, 410, 422, 429, 500, 502, 503 };
+    const size_t n = sizeof statuses / sizeof statuses[0];
+    board_entry_t e;
+    http_resp_t r;
+    char *json;
+    size_t len, i;
+
+    json = fixture_read("tests/fixtures/issue_one_closed.json", &len);
+    for (i = 0; i < n; i++) {
+        seed_entry(&e);
+        resp_from(&r, statuses[i], json, len, "W/\"newetag\"");
+        CHECK_EQ(gh_recheck_apply(&r, &e), 0);
+        CHECK(entry_unchanged(&e));
+    }
+    free(json);
+}
+
+/*
+ * A 200 whose body we cannot make sense of is not GitHub saying "closed", and a
+ * missing or junk `state` reads as open on purpose -- the conservative direction
+ * is the one that costs a re-check rather than a bounty.
+ */
+static void test_recheck_malformed_200_keeps(void)
+{
+    static const char *const keeps[] = {
+        "",                                     /* empty body */
+        "}{ not json",
+        "[]",                                   /* an array, not an issue object */
+        "42",
+        "null",
+        "{\"state\":7}",                        /* wrong type */
+        "{\"state\":null}",
+        "{}",                                   /* no state key at all */
+    };
+    const size_t n = sizeof keeps / sizeof keeps[0];
+    board_entry_t e;
+    http_resp_t r;
+    size_t i;
+
+    for (i = 0; i < n; i++) {
+        seed_entry(&e);
+        resp_from(&r, 200, (char *)keeps[i], strlen(keeps[i]), NULL);
+        CHECK_EQ(gh_recheck_apply(&r, &e), 0);
+    }
+
+    /* A body with no state but a real title still refreshes: it is a 200. */
+    {
+        const char *ok = "{\"title\":\"renamed\",\"updated_at\":\"2026-09-11T00:00:00Z\"}";
+
+        seed_entry(&e);
+        resp_from(&r, 200, (char *)ok, strlen(ok), "W/\"fresh\"");
+        CHECK_EQ(gh_recheck_apply(&r, &e), 0);
+        CHECK_STREQ(e.title, "renamed");
+        CHECK_STREQ(e.updated_at, "2026-09-11T00:00:00Z");
+        CHECK_STREQ(e.etag, "W/\"fresh\"");
+    }
+
+    /* Every state GitHub can send that is not "open" ends the row. */
+    {
+        const char *closed = "{\"state\":\"closed\"}";
+
+        seed_entry(&e);
+        resp_from(&r, 200, (char *)closed, strlen(closed), NULL);
+        CHECK_EQ(gh_recheck_apply(&r, &e), 1);
+    }
+
+    /* NULL arguments must not be dereferenced, and mean "keep". */
+    seed_entry(&e);
+    CHECK_EQ(gh_recheck_apply(NULL, &e), 0);
+    CHECK(entry_unchanged(&e));
+    resp_from(&r, 200, NULL, 0, NULL);
+    CHECK_EQ(gh_recheck_apply(&r, NULL), 0);
+}
+
+/*
+ * gh_recheck() itself needs a network, so only its setup paths run here. Each
+ * one has to leave the board exactly as it found it -- refusing to run is not a
+ * reason to lose rows.
+ */
+static void test_recheck_setup_failures(void)
+{
+    board_entry_t slots[2];
+    board_t b;
+    state_t st;
+    arena_t a;
+
+    CHECK_EQ(arena_init(&a, TEST_ARENA), 0);
+    memset(&st, 0, sizeof st);
+
+    seed_entry(&slots[0]);
+    seed_entry(&slots[1]);
+    slots[1].id = 7002;
+    memset(&b, 0, sizeof b);
+    b.entries = slots;
+    b.n = 2;
+    b.cap = 2;
+
+    CHECK(gh_recheck(NULL, &b, &st, 1) < 0);
+    CHECK(gh_recheck(&a, NULL, &st, 1) < 0);
+    CHECK(gh_recheck(&a, &b, NULL, 1) < 0);
+    {
+        board_t empty = b;
+
+        empty.entries = NULL;
+        CHECK(gh_recheck(&a, &empty, &st, 1) < 0);
+    }
+
+    /* An empty board needs no token and issues nothing. */
+    {
+        board_t none = b;
+
+        none.n = 0;
+        CHECK_EQ(gh_recheck(&a, &none, &st, 1), 0);
+    }
+
+    /* Everything already refreshed by this cycle's fetch: nothing to ask. */
+    slots[0].fresh = 1;
+    slots[1].fresh = 1;
+    unsetenv("GH_TOKEN");
+    CHECK_EQ(gh_recheck(&a, &b, &st, 1), 0);
+    CHECK_EQ(b.n, 2);
+
+    /* A stale row with no token is a setup failure, and keeps every entry. */
+    slots[0].fresh = 0;
+    CHECK(gh_recheck(&a, &b, &st, 1) < 0);
+    CHECK_EQ(b.n, 2);
+    CHECK_EQ(b.dirty, 0);
+    CHECK(entry_unchanged(&slots[0]));
+
+    /* An entry with nothing to build a URL from is kept, not dropped. */
+    slots[0].number = 0;
+    slots[1].fresh = 0;
+    slots[1].repo[0] = '\0';
+    CHECK_EQ(gh_recheck(&a, &b, &st, 1), 0);
+    CHECK_EQ(b.n, 2);
+
+    arena_destroy(&a);
+}
+
 int main(void)
 {
     TEST_RUN(test_basic_fields);
@@ -630,5 +1060,15 @@ int main(void)
     TEST_RUN(test_malformed_input);
     TEST_RUN(test_strings_are_arena_copies);
     TEST_RUN(test_token_is_required);
+    TEST_RUN(test_issue_to_board_carries_fields);
+    TEST_RUN(test_issue_to_board_truncates_on_utf8_boundaries);
+    TEST_RUN(test_recheck_keeps_on_304);
+    TEST_RUN(test_recheck_refreshes_on_200_open);
+    TEST_RUN(test_recheck_drops_closed_and_assigned);
+    TEST_RUN(test_recheck_drops_on_404);
+    TEST_RUN(test_recheck_keeps_on_transport_failure);
+    TEST_RUN(test_recheck_keeps_on_other_statuses);
+    TEST_RUN(test_recheck_malformed_200_keeps);
+    TEST_RUN(test_recheck_setup_failures);
     TEST_REPORT();
 }

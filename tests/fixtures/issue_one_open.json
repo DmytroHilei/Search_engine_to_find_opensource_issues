@@ -1,0 +1,23 @@
+{
+  "id": 7001,
+  "number": 4242,
+  "html_url": "https://github.com/tenstorrent/tt-metal/issues/4242",
+  "user": {
+    "login": "carol"
+  },
+  "comments": 3,
+  "labels": [
+    {
+      "name": "bounty"
+    },
+    {
+      "name": "good first issue"
+    }
+  ],
+  "body": "bf16 matmul returns NaN on the second tile row.",
+  "state": "open",
+  "title": "🔥 カーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネルカーネル 中文 🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮🧮",
+  "updated_at": "2026-09-10T11:30:00Z",
+  "assignees": [],
+  "assignee": null
+}

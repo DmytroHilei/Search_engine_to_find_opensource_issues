@@ -26,6 +26,17 @@
 #define GH_URL_MAX 1024
 
 /*
+ * Shared by the issue fetch and the board re-check so the two can never drift
+ * into presenting different Accept or API-version headers to the same API.
+ */
+static const char *const gh_base_hdrs[] = {
+    "Accept: application/vnd.github+json",
+    "X-GitHub-Api-Version: 2022-11-28",
+    "User-Agent: " GH_USER_AGENT,
+};
+#define GH_N_BASE_HDRS (sizeof gh_base_hdrs / sizeof gh_base_hdrs[0])
+
+/*
  * Staged per-repo state, parallel to state_t::repos and indexed the same way.
  * Module-static because the commit happens in a separate call, after notify.
  */
@@ -107,6 +118,29 @@ static size_t utf8_trunc_len(const char *s, size_t len, size_t max)
 
     /* Keep the character only when all of it fits below the cap. */
     return cut + seq <= max ? cut + seq : cut;
+}
+
+/*
+ * str_copy() for text that may be multi-byte. A GitHub title routinely exceeds
+ * board_entry_t::title, and a flat cut lands mid-sequence often enough to be a
+ * certainty rather than a risk: the clipped codepoint reaches gist.c, yyjson
+ * refuses to encode invalid UTF-8, and the whole cycle's publish is dropped over
+ * one truncated title. Every bounded copy into a board entry goes through here.
+ */
+static void utf8_copy(char *dst, size_t dstlen, const char *src)
+{
+    size_t n;
+
+    if (dst == NULL || dstlen == 0)
+        return;
+    if (src == NULL) {
+        dst[0] = '\0';
+        return;
+    }
+
+    n = utf8_trunc_len(src, strlen(src), dstlen - 1);
+    memcpy(dst, src, n);
+    dst[n] = '\0';
 }
 
 /* Returns the string value of `key`, or NULL when absent, null, or non-string. */
@@ -374,12 +408,8 @@ static repo_state_t *repo_slot(state_t *st, const char *const *repos, size_t i)
 int gh_fetch_all(arena_t *a, state_t *st, const char *const *repos, size_t n_repos,
                  issue_t **out, size_t *n_out)
 {
-    static const char *const base_hdrs[] = {
-        "Accept: application/vnd.github+json",
-        "X-GitHub-Api-Version: 2022-11-28",
-        "User-Agent: " GH_USER_AGENT,
-    };
-    const size_t n_base = sizeof base_hdrs / sizeof base_hdrs[0];
+    const char *const *base_hdrs = gh_base_hdrs;
+    const size_t n_base = GH_N_BASE_HDRS;
 
     const char *token;
     const char *auth;
@@ -700,4 +730,344 @@ done:
 
     LOGI("github: %zu issue(s) from %zu repo(s)", n_issues, n_ctx);
     return 0;
+}
+
+/* --------------------------------------------------------------- the board */
+
+void gh_issue_to_board(const issue_t *is, board_entry_t *out)
+{
+    if (out == NULL)
+        return;
+
+    memset(out, 0, sizeof *out);
+    if (is == NULL)
+        return;
+
+    out->id        = is->id;
+    out->number    = is->number;
+    out->llm_score = is->llm_score;
+    out->kw_score  = is->kw_score;
+    out->assigned  = is->assigned;
+
+    /*
+     * Every one of these can overrun its slot -- titles most of all -- so all of
+     * them go through utf8_copy() rather than snprintf. A repo name is ASCII and
+     * a timestamp is fixed-width, but routing them through the same helper costs
+     * nothing and removes the question of which fields were safe to cut flat.
+     */
+    utf8_copy(out->repo, sizeof out->repo, is->repo);
+    utf8_copy(out->title, sizeof out->title, is->title);
+    utf8_copy(out->html_url, sizeof out->html_url, is->html_url);
+    utf8_copy(out->why, sizeof out->why, is->why);
+    utf8_copy(out->updated_at, sizeof out->updated_at, is->updated_at);
+
+    /*
+     * first_seen belongs to board_merge(): only the board knows whether this id
+     * is arriving for the first time or is an existing row being re-scored, and
+     * stamping it here would reset the age of everything every cycle.
+     *
+     * etag stays empty on purpose. There is no per-issue ETag in a list payload;
+     * gh_recheck() records the one the first conditional GET returns, and until
+     * then that GET simply costs a rate-limit unit.
+     */
+}
+
+/*
+ * THE RE-CHECK PASS
+ *
+ * The main fetch is state=open&since=<watermark>: deltas only, so nothing in it
+ * would ever report that an issue closed or that somebody took it. Without a
+ * second pass the board rots into a list of bounties already being paid to
+ * someone else. Flipping the main fetch to state=all was rejected -- pytorch
+ * alone closes enough issues to blow past both the issue cap and the arena, to
+ * learn one bit about at most BOARD_MAX rows.
+ *
+ * The asymmetry in the drop table is deliberate and is the whole design: a wrong
+ * "keep" costs one conditional GET next cycle, while a wrong "drop" silently
+ * deletes a live bounty. So only an unambiguous answer from GitHub drops a row;
+ * every failure, timeout and unexpected status keeps it.
+ */
+
+/*
+ * Requests per round. One round is one curl_multi, so a small round buys
+ * fine-grained rate-limit checks at the price of re-handshaking TLS. Rate limit
+ * can only be read from a response, so the round size is exactly how far past
+ * RL_RESERVE this pass can overshoot -- 50 against a 5000/hr budget and a
+ * reserve of 100 is well inside the noise, and caps a full board at 4 rounds.
+ */
+#define GH_RECHECK_ROUND 50
+
+/*
+ * Exposed but deliberately absent from github.h: the drop table is the risky
+ * part of this increment and it has to be reachable from tests/test_github.c
+ * without a network. Same precedent as notify_build_title() in notify.c.
+ *
+ * Returns 1 when the entry must leave the board, 0 when it stays. On the
+ * refresh path it updates `e` in place; on every keep path it leaves `e`
+ * untouched, which is what makes a transport failure a no-op.
+ */
+int gh_recheck_apply(const http_resp_t *r, board_entry_t *e);
+
+int gh_recheck_apply(const http_resp_t *r, board_entry_t *e)
+{
+    yyjson_doc *doc = NULL;
+    yyjson_val *root;
+    const char *state, *title, *upd;
+    int drop = 0;
+
+    if (r == NULL || e == NULL)
+        return 0;
+
+    /*
+     * status 0 is a transport failure -- DNS, timeout, a dropped connection.
+     * Keeping is not politeness here: a laptop that closed its lid mid-cycle
+     * would otherwise wake up and empty the entire board in one pass.
+     */
+    if (r->status == 0)
+        return 0;
+    if (r->status == 304)
+        return 0;                       /* rule 2: unchanged, and free */
+    if (r->status == 404)
+        return 1;                       /* deleted or transferred to another repo */
+    if (r->status != 200)
+        return 0;                       /* 403/429/5xx: no verdict, so no change */
+
+    doc = yyjson_read(r->body != NULL ? r->body : "", r->body_len, YYJSON_READ_NOFLAG);
+    root = yyjson_doc_get_root(doc);
+    if (!yyjson_is_obj(root)) {
+        /* A 200 we cannot parse is not GitHub saying "closed". Keep it. */
+        yyjson_doc_free(doc);
+        return 0;
+    }
+
+    /*
+     * Anything that is not the string "open" is closed as far as the board is
+     * concerned. A missing or non-string `state` reads as open on purpose: the
+     * conservative direction is the one that costs a re-check, not a bounty.
+     */
+    state = obj_str(root, "state", NULL);
+    if (state != NULL && strcmp(state, "open") != 0)
+        drop = 1;
+    if (issue_is_assigned(root)) {
+        e->assigned = 1;                /* recorded even though the row is going */
+        drop = 1;
+    }
+
+    /*
+     * updated_at is refreshed even on the drop path: the caller turns it into
+     * the seen-set key, and under NOTIFY_ON_UPDATE that key is per-version, so
+     * marking the stale one would let the next fetch re-add the row.
+     */
+    upd = obj_str(root, "updated_at", NULL);
+    if (upd != NULL)
+        utf8_copy(e->updated_at, sizeof e->updated_at, upd);
+
+    if (!drop) {
+        title = obj_str(root, "title", NULL);
+        if (title != NULL)
+            utf8_copy(e->title, sizeof e->title, title);
+        /* Store the ETag so every later re-check of this row is a free 304. */
+        if (r->etag[0] != '\0')
+            str_copy(e->etag, sizeof e->etag, r->etag);
+        e->assigned = 0;
+    }
+
+    /* Scores are the judge's; a re-check never touches llm_score or kw_score. */
+
+    yyjson_doc_free(doc);
+    return drop;
+}
+
+int gh_recheck(arena_t *a, board_t *b, state_t *st, int dry_run)
+{
+    const char *token, *auth;
+    http_req_t *reqs = NULL;
+    http_resp_t *resps = NULL;
+    board_entry_t **todo = NULL;
+    long long *drop_ids = NULL;
+    size_t n_todo = 0, n_drop = 0, done = 0, i;
+    int stop = 0, checked = 0, dropped = 0;
+
+    if (a == NULL || b == NULL || b->entries == NULL || st == NULL)
+        return -EINVAL;
+    if (b->n == 0)
+        return 0;
+
+    /*
+     * Only rows this cycle's fetch did not already refresh. A fresh row was in
+     * the delta minutes ago; spending a request to ask again would double the
+     * cost of the pass for nothing.
+     */
+    todo = arena_calloc(a, b->n, sizeof *todo);
+    drop_ids = arena_calloc(a, b->n, sizeof *drop_ids);
+    reqs = arena_calloc(a, b->n, sizeof *reqs);
+    resps = arena_calloc(a, b->n, sizeof *resps);
+    if (todo == NULL || drop_ids == NULL || reqs == NULL || resps == NULL) {
+        LOGE("arena exhausted while setting up the board re-check");
+        return -ENOMEM;
+    }
+
+    for (i = 0; i < b->n; i++) {
+        board_entry_t *e = &b->entries[i];
+
+        if (e->fresh || e->id <= 0)
+            continue;
+        if (e->number <= 0 || e->repo[0] == '\0') {
+            /* No addressable issue URL. Nothing to ask, so nothing to conclude. */
+            LOGW("board: entry %lld has no repo/number to re-check; keeping", e->id);
+            continue;
+        }
+        todo[n_todo++] = e;
+    }
+    if (n_todo == 0)
+        return 0;
+
+    token = env_or_null("GH_TOKEN");
+    if (token == NULL || token[0] == '\0') {
+        LOGE("GH_TOKEN is unset or empty; the board cannot be re-checked. Every "
+             "entry is kept as it stands.");
+        return -EACCES;
+    }
+
+    auth = arena_printf(a, "Authorization: Bearer %s", token);
+    if (auth == NULL) {
+        LOGE("arena exhausted while building the re-check auth header");
+        return -ENOMEM;
+    }
+
+    /*
+     * Rounds rather than one 200-request batch, so RL_RESERVE can actually be
+     * honoured: the remaining budget only ever arrives on a response.
+     */
+    while (done < n_todo && !stop) {
+        size_t n_req = 0, base = done;
+        long rl_low = -1;
+        int rc;
+
+        while (n_req < GH_RECHECK_ROUND && done < n_todo) {
+            board_entry_t *e = todo[done];
+            const char **hdrs;
+            size_t h = 0, k;
+
+            hdrs = arena_calloc(a, GH_N_BASE_HDRS + 3, sizeof *hdrs);
+            if (hdrs == NULL) {
+                LOGE("arena exhausted while building re-check headers");
+                stop = 1;
+                break;
+            }
+            hdrs[h++] = auth;
+            for (k = 0; k < GH_N_BASE_HDRS; k++)
+                hdrs[h++] = gh_base_hdrs[k];
+            if (e->etag[0] != '\0') {
+                /* The point of storing a per-issue ETag: this reply is a 304 and
+                 * costs no rate-limit unit at all. */
+                hdrs[h] = arena_printf(a, "If-None-Match: %s", e->etag);
+                if (hdrs[h] == NULL) {
+                    LOGE("arena exhausted while building re-check headers");
+                    stop = 1;
+                    break;
+                }
+                h++;
+            }
+            hdrs[h] = NULL;
+
+            reqs[n_req].url = arena_printf(a, "%s/repos/%s/issues/%d",
+                                           GH_API_BASE, e->repo, e->number);
+            if (reqs[n_req].url == NULL) {
+                LOGE("arena exhausted while building re-check URLs");
+                stop = 1;
+                break;
+            }
+            reqs[n_req].method = "GET";
+            reqs[n_req].headers = hdrs;
+            reqs[n_req].body = NULL;
+            reqs[n_req].body_len = 0;
+            reqs[n_req].timeout_sec = GH_HTTP_TIMEOUT_SEC;
+            reqs[n_req].user = e;
+            n_req++;
+            done++;
+        }
+
+        if (n_req == 0)
+            break;
+
+        rc = http_perform_batch(a, reqs, n_req, resps, HTTP_MAX_CONCURRENT);
+        if (rc < 0) {
+            /*
+             * A setup failure means this round produced no verdicts at all. The
+             * rows it covered are kept, exactly as a per-request failure would
+             * leave them, and the pass gives up rather than retrying blind.
+             */
+            LOGW("board re-check: http_perform_batch failed (%d); %zu entr(ies) "
+                 "kept unchecked", rc, n_todo - base);
+            break;
+        }
+
+        for (i = 0; i < n_req; i++) {
+            http_resp_t *r = &resps[i];
+            board_entry_t *e = (board_entry_t *)r->user;
+
+            if (e == NULL)
+                continue;
+            checked++;
+
+            if (r->rl_remaining >= 0 && (rl_low < 0 || r->rl_remaining < rl_low))
+                rl_low = r->rl_remaining;
+            if ((r->status == 403 || r->status == 429) && r->retry_after >= 0) {
+                /* CLAUDE.md rule 8. The next cycle is hours away and the stored
+                 * ETags make the retry nearly free, so back off rather than
+                 * sleeping the whole single-threaded process here. */
+                LOGW("board re-check: HTTP %ld with Retry-After %lds -- stopping "
+                     "the pass, remaining entries kept", r->status, r->retry_after);
+                stop = 1;
+            }
+
+            if (r->status == 0)
+                LOGD("board re-check: %s#%d transport failure (curl %d); kept",
+                     e->repo, e->number, r->curl_err);
+
+            if (!gh_recheck_apply(r, e)) {
+                if (r->status == 200)
+                    b->dirty = 1;       /* title/etag/updated_at may have moved */
+                continue;
+            }
+
+            /*
+             * Deferred, not applied here: board_drop() compacts the array, and
+             * the pending requests in this and later rounds hold pointers into
+             * it. Collecting ids and dropping once at the end keeps every one of
+             * those pointers valid without a second index to maintain.
+             */
+            drop_ids[n_drop++] = e->id;
+            LOGD("board re-check: dropping %s#%d (HTTP %ld%s)", e->repo, e->number,
+                 r->status, e->assigned ? ", assigned" : "");
+
+            if (!dry_run) {
+                /*
+                 * The seen-set is what stops an assigned issue from being
+                 * re-added by the next fetch and dropped again by the next
+                 * re-check, flapping on and off the board forever. Skipped under
+                 * --dry-run: the set is mmap'd, so marking it writes to disk, and
+                 * a dry run writes nothing (same reason notify.c does not mark).
+                 */
+                state_mark_seen(st, state_key(e->id, e->updated_at));
+            }
+        }
+
+        /* CLAUDE.md rule 8: stop spending requests once the reserve is reached. */
+        if (rl_low >= 0 && rl_low < RL_RESERVE) {
+            LOGW("board re-check: GitHub rate budget down to %ld (reserve %d) -- "
+                 "stopping; %zu entr(ies) kept unchecked",
+                 rl_low, RL_RESERVE, n_todo - done);
+            stop = 1;
+        }
+    }
+
+    for (i = 0; i < n_drop; i++)
+        dropped += board_drop(b, drop_ids[i]);
+
+    if (checked > 0)
+        LOGI("board re-check: %d checked, %d dropped, %zu remain", checked, dropped,
+             b->n);
+    return dropped;
 }
