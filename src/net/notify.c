@@ -1,5 +1,6 @@
 #include "net/notify.h"
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -27,8 +28,15 @@ unsigned long notify_http_calls;
 /* ntfy truncates long titles anyway, and a phone shows far less than this. */
 #define NOTIFY_TITLE_MAX 250
 
-/* Exposed (not in notify.h) so the sanitising test can drive the real thing. */
+/*
+ * The board lives at one fixed URL for the life of the build, so the Click:
+ * value is a literal -- no arena, and nothing to fail while building a header.
+ */
+#define NOTIFY_BOARD_URL GIST_WEB_BASE "/" GIST_ID
+
+/* Exposed (not in notify.h) so the sanitising tests can drive the real thing. */
 size_t notify_build_title(char *dst, size_t dstlen, const char *repo, const char *title);
+size_t notify_build_summary_title(char *dst, size_t dstlen, const board_t *b, size_t n_new);
 
 static int notify_topic_is_placeholder(void)
 {
@@ -61,6 +69,58 @@ size_t notify_build_title(char *dst, size_t dstlen, const char *repo, const char
     n = ascii_sanitize(dst, dstlen, raw);
     strip_crlf(dst);
     return n;
+}
+
+/*
+ * The whole `Title:` value for a summary push: the two counts the user acts on,
+ * then the headline entry. Composed out of notify_build_title() rather than
+ * beside it, so the one byte-folding path in this module stays the only one --
+ * a second sanitiser is a second place to get header injection wrong.
+ *
+ * The literal parts are digits and punctuation, so they cannot reintroduce a
+ * non-ASCII byte; only the entry title can, and it arrives already folded.
+ */
+size_t notify_build_summary_title(char *dst, size_t dstlen, const board_t *b, size_t n_new)
+{
+    char top[NOTIFY_TITLE_MAX + 1];
+    char raw[1024];
+    size_t n;
+
+    if (dst == NULL || dstlen == 0)
+        return 0;
+
+    if (b != NULL && b->n > 0 && b->entries != NULL) {
+        notify_build_title(top, sizeof top, b->entries[0].repo, b->entries[0].title);
+        snprintf(raw, sizeof raw, "%zu new, %zu open: %s", n_new, b->n, top);
+    } else {
+        snprintf(raw, sizeof raw, "%zu new, 0 open", n_new);
+    }
+
+    n = ascii_sanitize(dst, dstlen, raw);
+    strip_crlf(dst);
+    return n;
+}
+
+/*
+ * Markdown body. Emoji and CJK are fine here -- rule 5 constrains headers, not
+ * bodies -- so the entry title goes in raw and the phone renders what GitHub
+ * actually says. Returns NULL only on arena exhaustion.
+ */
+static const char *notify_build_summary_body(arena_t *a, const board_t *b, size_t n_new)
+{
+    const board_entry_t *top;
+
+    /* n_new > 0 against an empty board means the caller merged nothing it kept.
+     * Report the counts rather than invent a headline that does not exist. */
+    if (b->n == 0)
+        return arena_printf(a, "**%zu new**, nothing open on the board.", n_new);
+
+    top = &b->entries[0];
+    return arena_printf(a,
+                        "**%zu new, %zu open**\n\n"
+                        "1. [%s#%d %s](%s) - llm %d\n\n%s",
+                        n_new, b->n, top->repo, top->number, top->title,
+                        top->html_url, top->llm_score, top->why);
 }
 
 /* Case-insensitive substring, ASCII only. Labels are ASCII in practice. */
@@ -257,4 +317,104 @@ int notify_cycle(arena_t *a, state_t *st, issue_t *issues, size_t n, int dry_run
     if (dry_run)
         fflush(stdout);
     return sent;
+}
+
+int notify_summary(arena_t *a, const board_t *b, size_t n_new, int dry_run)
+{
+    char title[NOTIFY_TITLE_MAX + 1];
+    const char *hdrs[8];
+    const char *tok, *body;
+    const board_entry_t *top;
+    http_req_t req;
+    http_resp_t resp;
+    size_t nh = 0, i;
+    int prio;
+
+    if (a == NULL || b == NULL || (b->n > 0 && b->entries == NULL))
+        return -EINVAL;
+
+    /*
+     * Nothing new means no buzz. The board is state and is still sitting at the
+     * same URL; a push that says "nothing changed" is exactly the noise the
+     * board was built to remove, and eight of them a day trains the user to
+     * ignore the one cycle that matters.
+     */
+    if (n_new == 0)
+        return 0;
+
+    /* The board arrives ranked, so entry 0 is the headline by construction. */
+    top  = b->n > 0 ? &b->entries[0] : NULL;
+    prio = notify_priority(top != NULL ? top->llm_score : 0);
+    notify_build_summary_title(title, sizeof title, b, n_new);
+
+    body = notify_build_summary_body(a, b, n_new);
+    if (body == NULL) {
+        LOGE("notify: arena exhausted building the summary body");
+        return -ENOMEM;
+    }
+
+    if (dry_run) {
+        /*
+         * Returns before any http call -- that is the whole point of the branch,
+         * and tests/test_notify.c asserts notify_http_calls stays 0.
+         *
+         * Returns 1 rather than 0 for the same reason notify_cycle() reports
+         * what it would have sent: --dry-run is how the summary gets eyeballed,
+         * and a caller logging "0 pushes" would misreport a working cycle.
+         */
+        printf("[dry-run] summary prio=%d\n"
+               "          %s\n"
+               "          click: %s\n"
+               "%s\n",
+               prio, title, NOTIFY_BOARD_URL, body);
+        fflush(stdout);
+        return 1;
+    }
+
+    hdrs[nh++] = "Content-Type: text/plain; charset=utf-8";
+    hdrs[nh++] = arena_printf(a, "Title: %s", title);
+    hdrs[nh++] = arena_printf(a, "Priority: %d", prio);
+    /* No labels on a board entry, so no derive_tags(): one literal tag for the
+     * board, plus the rocket derive_tags() reserves for a top-priority push. */
+    hdrs[nh++] = prio >= 5 ? "Tags: clipboard,rocket" : "Tags: clipboard";
+    /* The point of the whole increment: the push is a doorbell, the board is
+     * the room. Literal, so unlike notify_send()'s Click it cannot be dropped. */
+    hdrs[nh++] = "Click: " NOTIFY_BOARD_URL;
+    hdrs[nh++] = "Markdown: yes";
+
+    tok = env_or_null("NTFY_TOKEN");
+    if (tok != NULL)                        /* self-hosted ntfy with auth only */
+        hdrs[nh++] = arena_printf(a, "Authorization: Bearer %s", tok);
+    hdrs[nh] = NULL;
+
+    for (i = 0; i < nh; i++) {
+        if (hdrs[i] == NULL) {
+            LOGE("notify: arena exhausted building the summary headers");
+            return -ENOMEM;
+        }
+    }
+
+    memset(&req, 0, sizeof req);
+    req.url = arena_printf(a, "%s/%s", NTFY_SERVER, NTFY_TOPIC);
+    if (req.url == NULL) {
+        LOGE("notify: arena exhausted building the ntfy URL");
+        return -ENOMEM;
+    }
+    req.method      = "POST";
+    req.headers     = hdrs;
+    req.body        = body;
+    req.body_len    = strlen(body);
+    req.timeout_sec = NOTIFY_TIMEOUT_SEC;
+
+    memset(&resp, 0, sizeof resp);
+    notify_http_calls++;                    /* the --dry-run invariant hangs off this */
+    if (http_perform_one(a, &req, &resp) < 0) {
+        LOGW("notify: transport failure pushing the cycle summary");
+        return -EIO;
+    }
+    if (resp.status < 200 || resp.status >= 300) {
+        LOGW("notify: ntfy replied %ld for the cycle summary", resp.status);
+        return -EIO;
+    }
+    return 1;
 }
