@@ -129,6 +129,123 @@ static void test_basic_fields(void)
     arena_destroy(&a);
 }
 
+/*
+ * Assignment is what lets the board drop a bounty somebody else already holds,
+ * so every shape GitHub uses to say "nobody" has to parse as unassigned rather
+ * than as a crash or a false positive.
+ */
+static void test_assignment_is_parsed(void)
+{
+    arena_t a;
+    issue_t out[8];
+    char nu[32];
+    char *json;
+    size_t len;
+    int n;
+
+    CHECK_EQ(arena_init(&a, TEST_ARENA), 0);
+    json = fixture_read("tests/fixtures/issues_assignees.json", &len);
+    poison(out, 8);
+
+    n = gh_parse_issues(&a, json, len, "tenstorrent/tt-metal", out, 8, nu, sizeof nu);
+
+    /* 7 objects in, the last a pull request -- assigned, and still dropped. */
+    CHECK_EQ(n, 6);
+    CHECK_STREQ(nu, "2026-09-10T14:00:00Z");
+
+    /* One entry in `assignees`. */
+    CHECK_EQ(out[0].id, 5001);
+    CHECK_EQ(out[0].assigned, 1);
+
+    /* The everyday unassigned payload: "assignee": null and "assignees": []. */
+    CHECK_EQ(out[1].id, 5002);
+    CHECK_EQ(out[1].assigned, 0);
+
+    /* Explicit null with no array at all. */
+    CHECK_EQ(out[2].id, 5003);
+    CHECK_EQ(out[2].assigned, 0);
+
+    /* No array, so the legacy single-assignee field decides. */
+    CHECK_EQ(out[3].id, 5004);
+    CHECK_EQ(out[3].assigned, 1);
+
+    /* More than one holder; the first hit is enough. */
+    CHECK_EQ(out[4].id, 5005);
+    CHECK_EQ(out[4].assigned, 1);
+
+    /* Both keys missing entirely. */
+    CHECK_EQ(out[5].id, 5006);
+    CHECK_EQ(out[5].assigned, 0);
+
+    CHECK(is_poisoned(&out[6]));
+    free(json);
+
+    /* The pre-existing fixtures carry no assignment keys: all unassigned. */
+    json = fixture_read("tests/fixtures/issues_basic.json", &len);
+    CHECK_EQ(gh_parse_issues(&a, json, len, "r/r", out, 8, nu, sizeof nu), 3);
+    CHECK_EQ(out[0].assigned, 0);
+    CHECK_EQ(out[1].assigned, 0);
+    CHECK_EQ(out[2].assigned, 0);
+    free(json);
+
+    arena_destroy(&a);
+}
+
+/*
+ * Wrong types on the assignment keys. GitHub does not emit these, but the
+ * parser reads untrusted network input and none of them may fault. A junk value
+ * must read as unassigned: a false "assigned" silently throws away an open
+ * bounty, whereas a false "unassigned" costs one re-check next cycle.
+ */
+static void test_assignment_wrong_types(void)
+{
+    static const struct {
+        const char *frag;
+        int want;
+    } cases[] = {
+        { "\"assignees\":{}",                                  0 },
+        { "\"assignees\":\"nobody\"",                          0 },
+        { "\"assignees\":7",                                   0 },
+        { "\"assignees\":null",                                0 },
+        { "\"assignees\":[null,7,\"x\",[]]",                   0 },
+        { "\"assignees\":[{}]",                                0 },
+        { "\"assignees\":[{\"login\":42}]",                    0 },
+        { "\"assignees\":[null,{\"login\":\"z\"}]",            1 },
+        { "\"assignee\":\"kai\"",                              0 },
+        { "\"assignee\":[]",                                   0 },
+        { "\"assignee\":{}",                                   0 },
+        { "\"assignee\":{\"id\":7}",                           0 },
+        /* Not a shape GitHub produces; the array is authoritative regardless. */
+        { "\"assignees\":[],\"assignee\":{\"login\":\"kai\"}", 0 },
+        { "\"assignees\":null,\"assignee\":{\"login\":\"k\"}", 1 },
+    };
+    const size_t n_cases = sizeof cases / sizeof cases[0];
+    arena_t a;
+    issue_t out[2];
+    char nu[32];
+    size_t i;
+
+    CHECK_EQ(arena_init(&a, TEST_ARENA), 0);
+
+    for (i = 0; i < n_cases; i++) {
+        char json[512];
+        int jlen;
+
+        jlen = snprintf(json, sizeof json,
+                        "[{\"id\":%zu,\"number\":1,\"title\":\"t\",\"html_url\":\"u\","
+                        "\"updated_at\":\"2026-01-01T00:00:00Z\",%s}]",
+                        i + 1, cases[i].frag);
+        CHECK(jlen > 0 && (size_t)jlen < sizeof json);
+
+        poison(out, 2);
+        CHECK_EQ(gh_parse_issues(&a, json, (size_t)jlen, "r/r", out, 2, nu, sizeof nu), 1);
+        CHECK_EQ(out[0].assigned, cases[i].want);
+        CHECK(is_poisoned(&out[1]));
+    }
+
+    arena_destroy(&a);
+}
+
 static void test_pull_requests_are_filtered(void)
 {
     arena_t a;
@@ -503,6 +620,8 @@ static void test_token_is_required(void)
 int main(void)
 {
     TEST_RUN(test_basic_fields);
+    TEST_RUN(test_assignment_is_parsed);
+    TEST_RUN(test_assignment_wrong_types);
     TEST_RUN(test_pull_requests_are_filtered);
     TEST_RUN(test_newest_updated_includes_prs);
     TEST_RUN(test_edge_cases);

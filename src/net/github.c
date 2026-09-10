@@ -121,6 +121,37 @@ static const char *obj_str(yyjson_val *obj, const char *key, size_t *len_out)
     return yyjson_get_str(v);
 }
 
+/*
+ * Whether somebody already holds the issue.
+ *
+ * `assignees` is authoritative; `assignee` is the pre-2016 single-holder field
+ * GitHub still emits beside it and is the only signal when a payload omits the
+ * array. Both arrive as JSON null or [] constantly, and neither means assigned.
+ *
+ * Only a user object carrying a login counts, and anything malformed reads as
+ * unassigned on purpose: the caller drops assigned issues, so inferring
+ * "assigned" from junk would silently discard a bounty that was still open,
+ * while erring the other way costs one conditional re-check next cycle.
+ */
+static int issue_is_assigned(yyjson_val *item)
+{
+    yyjson_val *arr = yyjson_obj_get(item, "assignees");
+
+    if (yyjson_is_arr(arr)) {
+        yyjson_arr_iter it = yyjson_arr_iter_with(arr);
+        yyjson_val *v;
+
+        while ((v = yyjson_arr_iter_next(&it)) != NULL) {
+            if (obj_str(v, "login", NULL) != NULL)
+                return 1;
+        }
+        /* An empty array is GitHub stating "nobody" -- not a missing answer. */
+        return 0;
+    }
+
+    return obj_str(yyjson_obj_get(item, "assignee"), "login", NULL) != NULL;
+}
+
 int gh_parse_issues(arena_t *a, const char *json, size_t json_len, const char *repo,
                     issue_t *out, size_t out_cap, char *newest_updated, size_t nu_len)
 {
@@ -208,6 +239,8 @@ int gh_parse_issues(arena_t *a, const char *json, size_t json_len, const char *r
         is->id = (long long)yyjson_get_sint(yyjson_obj_get(item, "id"));
         is->number = yyjson_get_int(yyjson_obj_get(item, "number"));
         is->comments = yyjson_get_int(yyjson_obj_get(item, "comments"));
+        /* The board drops these: a bounty only pays whoever was assigned first. */
+        is->assigned = issue_is_assigned(item);
         is->kw_score = 0;
         is->llm_score = -1;         /* prefilter/judge fill these in later */
         is->why = NULL;

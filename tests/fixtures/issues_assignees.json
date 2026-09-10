@@ -1,0 +1,155 @@
+[
+  {
+    "id": 5001,
+    "number": 41,
+    "title": "bf16 matmul returns NaN on the second Tensix core",
+    "body": "Reproduces on a Grayskull e150 with the 0.5 wheel. Bounty attached.",
+    "html_url": "https://github.com/tenstorrent/tt-metal/issues/41",
+    "state": "open",
+    "updated_at": "2026-09-10T14:00:00Z",
+    "comments": 5,
+    "user": { "login": "ivy" },
+    "labels": [
+      { "name": "bounty" }
+    ],
+    "assignee": {
+      "login": "kai",
+      "id": 771,
+      "type": "User"
+    },
+    "assignees": [
+      {
+        "login": "kai",
+        "id": 771,
+        "type": "User"
+      }
+    ]
+  },
+  {
+    "id": 5002,
+    "number": 40,
+    "title": "Allocator double free during multi-device teardown",
+    "body": "ASan report inline.",
+    "html_url": "https://github.com/tenstorrent/tt-metal/issues/40",
+    "state": "open",
+    "updated_at": "2026-09-10T13:30:00Z",
+    "comments": 2,
+    "user": { "login": "lena" },
+    "labels": [
+      { "name": "bug" }
+    ],
+    "assignee": null,
+    "assignees": []
+  },
+  {
+    "id": 5003,
+    "number": 39,
+    "title": "Docs: the tilize example no longer compiles",
+    "body": "One-line fix.",
+    "html_url": "https://github.com/tenstorrent/tt-metal/issues/39",
+    "state": "open",
+    "updated_at": "2026-09-10T12:15:00Z",
+    "comments": 0,
+    "user": { "login": "mo" },
+    "labels": [],
+    "assignee": null
+  },
+  {
+    "id": 5004,
+    "number": 38,
+    "title": "Reduce op overflows for int32 inputs near INT_MAX",
+    "body": "Legacy payload shape: single assignee, no assignees array.",
+    "html_url": "https://github.com/tenstorrent/tt-metal/issues/38",
+    "state": "open",
+    "updated_at": "2026-09-10T11:00:00Z",
+    "comments": 1,
+    "user": { "login": "nia" },
+    "labels": [
+      { "name": "bounty" }
+    ],
+    "assignee": {
+      "login": "omar",
+      "id": 772,
+      "type": "User"
+    }
+  },
+  {
+    "id": 5005,
+    "number": 37,
+    "title": "Kernel launch latency regression after the dispatch rewrite",
+    "body": "Three people are already on this one.",
+    "html_url": "https://github.com/tenstorrent/tt-metal/issues/37",
+    "state": "open",
+    "updated_at": "2026-09-10T10:20:00Z",
+    "comments": 9,
+    "user": { "login": "priya" },
+    "labels": [
+      { "name": "performance" }
+    ],
+    "assignee": {
+      "login": "quinn",
+      "id": 773,
+      "type": "User"
+    },
+    "assignees": [
+      {
+        "login": "quinn",
+        "id": 773,
+        "type": "User"
+      },
+      {
+        "login": "rafa",
+        "id": 774,
+        "type": "User"
+      },
+      {
+        "login": "sam",
+        "id": 775,
+        "type": "Bot"
+      }
+    ]
+  },
+  {
+    "id": 5006,
+    "number": 36,
+    "title": "Segfault in the host runtime when two programs share a buffer",
+    "body": "Neither assignment key is present in this payload at all.",
+    "html_url": "https://github.com/tenstorrent/tt-metal/issues/36",
+    "state": "open",
+    "updated_at": "2026-09-10T09:05:00Z",
+    "comments": 3,
+    "user": { "login": "tess" },
+    "labels": [
+      { "name": "bug" }
+    ]
+  },
+  {
+    "id": 5007,
+    "number": 35,
+    "title": "matmul: fix the bf16 accumulator",
+    "body": "An assigned pull request is still a pull request.",
+    "html_url": "https://github.com/tenstorrent/tt-metal/pull/35",
+    "state": "open",
+    "updated_at": "2026-09-10T08:00:00Z",
+    "comments": 4,
+    "user": { "login": "kai" },
+    "labels": [],
+    "assignee": {
+      "login": "kai",
+      "id": 771,
+      "type": "User"
+    },
+    "assignees": [
+      {
+        "login": "kai",
+        "id": 771,
+        "type": "User"
+      }
+    ],
+    "pull_request": {
+      "url": "https://api.github.com/repos/tenstorrent/tt-metal/pulls/35",
+      "html_url": "https://github.com/tenstorrent/tt-metal/pull/35",
+      "merged_at": null
+    }
+  }
+]
