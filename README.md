@@ -138,16 +138,21 @@ src/
   core/           no network, no policy -- memory and durability
     arena.c/h     bump allocator, reset once per cycle
     util.c/h      logging, RFC3339, hashing, ASCII sanitising
-    state.c/h     mmap'd seen-set, atomic etag/watermark rewrite
+    fileio.c/h    the atomic rewrite both state files share
+    state.c/h     mmap'd seen-set, etag/watermark file
+    board.c/h     the ranked board: load, merge, rank, evict, board.tsv
 
   net/            everything that speaks HTTP
     http.c/h      curl_multi wrapper: HTTP/2, gzip, rate-limit headers
-    github.c/h    issue fetch, ETag cache, watermark, pagination, PR filter
-    notify.c/h    ntfy POST, ASCII header sanitising, per-cycle cap
+    github.c/h    issue fetch, ETag cache, watermark, pagination, PR filter,
+                  and the per-issue re-check that keeps the board honest
+    notify.c/h    ntfy POST, ASCII header sanitising, cycle summary
+    gist.c/h      PATCH the board into one secret gist
 
   pipeline/       decides which issues are worth your attention
     prefilter.c/h hand-written Aho-Corasick build + weighted score
     judge.c/h     LLM batching; three backends behind judge_batch()
+    render.c/h    board -> Markdown
 
 third_party/yyjson/
 tests/            plain assertions, recorded JSON fixtures, no framework
@@ -158,3 +163,69 @@ build/            all objects, dep files and test binaries (gitignored)
 `build/` mirrors the source tree: `src/net/http.c` compiles to
 `build/src/net/http.o`, and test binaries land in `build/tests/`. `make clean`
 is just `rm -r build`.
+
+## Next steps
+
+The daemon is complete and tested. What is left is configuration and one
+judgement call, in the order you should do them.
+
+**1. Set `NTFY_TOPIC`.** `openssl rand -hex 16`. `notify_init()` refuses to run
+with the placeholder, and for good reason — see above.
+
+**2. Create the gist and set `GIST_ID`.**
+
+```sh
+gh gist create --secret -d issuewatch board.md
+```
+
+Take the hex id from the URL. The token needs `gist` scope, which means a
+**classic** token — a fine-grained PAT cannot write gists. Get this wrong and
+the PATCH fails with a bare `404` that looks exactly like a wrong id; the error
+message prints the scopes your token actually presents, so read it.
+
+**3. Pick a judge model that can count.** This is the real open question, and
+there is measured evidence for it below.
+
+`qwen3:4b` was run against 107 real prefiltered issues in 14 batches:
+
+| Verdicts returned | Batches |
+| --- | --- |
+| 8 of 8 | 6 |
+| 7 of 8 | 4 |
+| 4 of 8 | 2 |
+| 3 of 8 | 1 |
+| 0 of 8 | 1 |
+
+Half the batches came back short, and every missing verdict is a candidate
+silently discarded — lost to the model, not to your thresholds. Worse, several
+`why` strings arrived attached to the wrong issue: `judge_parse_verdicts()`
+applies each verdict by the model's own bounds-checked `"i"` field, so the
+mapping is right and the model's indices are wrong.
+
+Two ways out, cheapest first: `OLLAMA_MODEL "qwen3:8b"` (~5.5 GB, fits an 8 GB
+card with the batch), or `JUDGE_MODE JUDGE_API` with Haiku, which is what the
+batching was designed around. Re-run and compare the table above before
+trusting the scores.
+
+**4. Then a real cycle.**
+
+```sh
+GH_TOKEN=$(gh auth token) ./issuewatch --oneshot
+```
+
+Open the gist on your phone. Run it a second time and confirm the entries
+persist, the ages increment, and anything you close disappears from the board.
+
+### If you installed Ollama without root
+
+The official installer needs root and sets up a system service. A rootless
+install puts the binary at `~/.local/bin/ollama` with no service, so start the
+server yourself and set the idle unload window **there** — not in
+`systemd/issuewatch.service`, where it does nothing:
+
+```sh
+OLLAMA_KEEP_ALIVE=2m ollama serve
+```
+
+`--oneshot` will simply fail its judge batches if the server is not up, publish
+the board it already had, and leave the watermark alone for a retry.

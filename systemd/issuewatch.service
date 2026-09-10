@@ -7,9 +7,9 @@ After=network-online.target
 Type=oneshot
 # Mode 0600. Holds GH_TOKEN, and ANTHROPIC_API_KEY when JUDGE_MODE is not local.
 EnvironmentFile=%h/.config/issuewatch/env
-# Ollama drops the model from VRAM after this idle window. Polls are hours
-# apart, so VRAM sits at 0 for ~99% of wall time.
-Environment=OLLAMA_KEEP_ALIVE=2m
+# NOTE: OLLAMA_KEEP_ALIVE does NOT belong here. It is read by the `ollama serve`
+# process, not by this one -- judge.c sends no keep_alive field -- so setting it
+# in this unit does nothing at all. Put it on whatever starts the Ollama server.
 ExecStart=%h/Search_engine/issuewatch --oneshot
 
 # The process needs the network, its own state dir, and nothing else.

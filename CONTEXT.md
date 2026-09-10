@@ -126,6 +126,29 @@ Model sizing, Q4_K_M:
 If there is no usable GPU, `num_gpu: 0` and a 1.7B model on CPU is still fine —
 you are judging maybe 20–40 issues every 3 hours, not serving traffic.
 
+**Measured, and it changes the recommendation.** `qwen3:4b` on an RTX 5060,
+107 real prefiltered issues, 14 batches of 8, 2m49s total:
+
+| Verdicts returned | Batches |
+| --- | --- |
+| 8 of 8 | 6 |
+| 7 of 8 | 4 |
+| 4 of 8 | 2 |
+| 3 of 8 | 1 |
+| 0 of 8 | 1 |
+
+Half the batches came back short. A missing verdict leaves `llm_score = -1` and
+the issue is discarded, so those are candidates lost to the model rather than to
+`LLM_SCORE_MIN`. Several `why` strings also came back attached to the wrong
+issue — `judge_parse_verdicts()` applies each one by the model's own `"i"`
+field and bounds-checks it, so the mapping is correct and the model's indices
+are not.
+
+The table above is the test to re-run when changing models: batch attribution,
+not prose quality, is what a 4B model fails at first. 4B is enough to *screen*
+(`JUDGE_HYBRID`), which is exactly what that mode is for; it is not enough to
+number its own answers.
+
 ### `JUDGE_API`
 Anthropic Messages API, `claude-haiku-*`. Key from `ANTHROPIC_API_KEY`. Use when
 you don't want the model resident at all, or when local judgement is too coarse.
@@ -309,6 +332,10 @@ Still open:
 - Whether discovery mode is worth building at all. Probably not until watch
   mode has been running for a month.
 - Whether `BOARD_MAX` of 200 is the right size. Nothing has come close to it.
+- **Which judge model**, which is now the one decision blocking trust in the
+  scores. `qwen3:4b` demonstrably miscounts its own batches (section 6);
+  `qwen3:8b` or `JUDGE_API` are the two candidates and neither has been
+  measured yet.
 
 ## 14. The ranked board
 
