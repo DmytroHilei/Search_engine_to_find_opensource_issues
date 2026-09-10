@@ -304,6 +304,11 @@ int state_flush(state_t *st)
     if (st == NULL || st->repos == NULL)
         return -EINVAL;
 
+    if (st->read_only) {
+        LOGD("state: dry run, not writing the etag file");
+        return 0;
+    }
+
     for (i = 0; i < st->n_repos; i++) {
         if (st->repos[i].dirty)
             dirty = 1;

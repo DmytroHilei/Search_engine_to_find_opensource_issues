@@ -327,6 +327,9 @@ int main(int argc, char **argv)
         goto out;
     }
     state_ready = 1;
+    /* Belt to commit_cycle()'s braces: that skips the flush a cycle asks for,
+     * this stops state_close() writing the seeded watermarks on the way out. */
+    st.read_only = dry_run;
 
     /* Shares the state directory: board.tsv sits next to etags and seen.bin,
      * and gets the same atomic-rewrite treatment. */

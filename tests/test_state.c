@@ -221,6 +221,43 @@ static void test_seen_collision_overwrites_oldest(void)
     CHECK_EQ(state_close(&st), 0);
 }
 
+/*
+ * --dry-run must leave the state directory exactly as it found it. state_open()
+ * marks every freshly seeded repo dirty, so the teardown flush -- not the cycle
+ * -- is what would otherwise write watermarks a dry run never agreed to.
+ */
+static void test_read_only_writes_no_etags(void)
+{
+    state_t st;
+    repo_state_t *rs;
+    char etags_path[512];
+    struct stat sb;
+
+    sandbox_wipe();
+    CHECK_EQ(state_open(&st, TEST_REPOS, N_TEST_REPOS), 0);
+    st.read_only = 1;
+
+    rs = state_repo(&st, "NVIDIA/cutlass");
+    CHECK(rs != NULL);
+    if (rs != NULL) {
+        snprintf(rs->etag, sizeof rs->etag, "W/\"deadbeef\"");
+        rs->dirty = 1;
+    }
+
+    /* Reports success and writes nothing: callers must not treat a dry run as
+     * a failed flush. */
+    CHECK_EQ(state_flush(&st), 0);
+    snprintf(etags_path, sizeof etags_path, "%s/etags", g_dir);
+    CHECK(stat(etags_path, &sb) != 0);
+
+    /* Teardown is the path that actually bit: it flushes unconditionally. */
+    CHECK_EQ(state_close(&st), 0);
+    CHECK(stat(etags_path, &sb) != 0);
+
+    snprintf(etags_path, sizeof etags_path, "%s/etags.tmp", g_dir);
+    CHECK(stat(etags_path, &sb) != 0);
+}
+
 static void test_flush_roundtrip(void)
 {
     state_t st;
@@ -359,6 +396,7 @@ int main(void)
     TEST_RUN(test_seen_survives_reopen);
     TEST_RUN(test_seen_collision_overwrites_oldest);
     TEST_RUN(test_flush_roundtrip);
+    TEST_RUN(test_read_only_writes_no_etags);
     TEST_RUN(test_garbage_lines_skipped);
     TEST_RUN(test_bad_args);
 

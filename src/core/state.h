@@ -27,6 +27,13 @@ typedef struct {
     size_t n_repos;
     uint64_t *seen;               /* mmap'd, SEEN_CAPACITY slots */
     int seen_fd;
+    /*
+     * Set for --dry-run. state_open() marks every freshly seeded repo dirty, so
+     * without this the teardown flush writes an etag file that the cycle itself
+     * carefully refused to write -- a dry run would leave watermarks behind
+     * anyway, just via a different path.
+     */
+    int read_only;
     char dir[STATE_PATH_MAX];
 } state_t;
 
