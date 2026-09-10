@@ -23,8 +23,13 @@ static arena_t g_arena;
 static ac_t *g_ac;
 
 /* Weights lifted from config.h's KEYWORDS[], named so the maths below reads. */
-#define W_GOOD_FIRST_ISSUE   6
-#define W_HELP_WANTED        5
+/* "bounty" is calibrated to equal KW_SCORE_MIN exactly, so a funded issue
+ * always clears the gate unaided. Tests below use it to build issues that pass
+ * regardless of how the gate is later re-tuned. */
+#define W_BOUNTY            24
+#define W_READ_ME           (-4)
+#define W_GOOD_FIRST_ISSUE  12
+#define W_HELP_WANTED       10
 #define W_PERFORMANCE        4
 #define W_CUDA               5
 #define W_KERNEL             3
@@ -75,7 +80,9 @@ static void test_phrase_matches_as_a_unit(void)
     /* Same for the other multi-word terms, which are not label_only. */
     CHECK_EQ(prefilter_score_text(g_ac, "hit a race condition", 0), W_RACE_CONDITION);
     CHECK_EQ(prefilter_score_text(g_ac, "race  condition", 0), 0);
-    CHECK_EQ(prefilter_score_text(g_ac, "memory leak in the allocator", 0), W_MEMORY_LEAK);
+    /* Filler words here must not themselves be KEYWORDS[] terms, or this stops
+     * isolating the phrase -- "allocator" used to sit here and became a term. */
+    CHECK_EQ(prefilter_score_text(g_ac, "memory leak in the parser", 0), W_MEMORY_LEAK);
     CHECK_EQ(prefilter_score_text(g_ac, "memory", 0), 0);
     CHECK_EQ(prefilter_score_text(g_ac, "leak", 0), 0);
     CHECK_EQ(prefilter_score_text(g_ac, "undefined behavior in the shift", 0),
@@ -290,13 +297,14 @@ static void test_apply_compacts_stably(void)
     issue_t arr[6];
     size_t kept;
 
-    /* 0,2,5 pass the gate; 1,3,4 do not. */
-    arr[0] = mk_issue("cuda kernel regression", "");        /* 5+3+3 = 11 */
-    arr[1] = mk_issue("typo in README", "");                /* -6 */
-    arr[2] = mk_issue("memory leak and segfault", "");      /* 4+4 = 8 */
-    arr[3] = mk_issue("dependabot bump version", "");       /* -18 */
-    arr[4] = mk_issue("nothing interesting here", "");      /* 0 */
-    arr[5] = mk_issue("undefined behavior in cuda", "");    /* 4+5 = 9 */
+    /* 0,2,5 pass the gate; 1,3,4 do not. The survivors lead with "bounty" so
+     * they stay above the gate no matter how KW_SCORE_MIN is re-tuned. */
+    arr[0] = mk_issue("bounty: cuda kernel regression", "");     /* 24+5+3+3 */
+    arr[1] = mk_issue("typo in README", "");                     /* -6-4 */
+    arr[2] = mk_issue("bounty: memory leak and segfault", "");   /* 24+4+4 */
+    arr[3] = mk_issue("dependabot bump version", "");            /* -18 */
+    arr[4] = mk_issue("nothing interesting here", "");           /* 0 */
+    arr[5] = mk_issue("bounty: undefined behavior in cuda", ""); /* 24+4+5 */
     arr[0].id = 100;
     arr[1].id = 101;
     arr[2].id = 102;
@@ -311,9 +319,9 @@ static void test_apply_compacts_stably(void)
     CHECK_EQ(arr[2].id, 105);
 
     /* Scores are written through, and every survivor clears the gate. */
-    CHECK_EQ(arr[0].kw_score, W_CUDA + W_KERNEL + W_REGRESSION);
-    CHECK_EQ(arr[1].kw_score, W_MEMORY_LEAK + W_SEGFAULT);
-    CHECK_EQ(arr[2].kw_score, W_UNDEF_BEHAVIOR + W_CUDA);
+    CHECK_EQ(arr[0].kw_score, W_BOUNTY + W_CUDA + W_KERNEL + W_REGRESSION);
+    CHECK_EQ(arr[1].kw_score, W_BOUNTY + W_MEMORY_LEAK + W_SEGFAULT);
+    CHECK_EQ(arr[2].kw_score, W_BOUNTY + W_UNDEF_BEHAVIOR + W_CUDA);
     CHECK(arr[0].kw_score >= KW_SCORE_MIN);
     CHECK(arr[1].kw_score >= KW_SCORE_MIN);
     CHECK(arr[2].kw_score >= KW_SCORE_MIN);
@@ -332,26 +340,30 @@ static void test_apply_edge_cases(void)
     arr[1] = mk_issue("translation update", "");
     arr[2] = mk_issue("", "");
     CHECK_EQ(prefilter_apply(g_ac, arr, 3), 0);
+    /* Topical-but-unfunded must also fail: every watched repo is a GPU project,
+     * so "cuda kernel" alone is the noise floor here, not a signal. */
     CHECK_EQ(arr[0].kw_score, W_TYPO);
     CHECK_EQ(arr[1].kw_score, W_TRANSLATION);
     CHECK_EQ(arr[2].kw_score, 0);
 
     /* Everything survives -- the no-move path. */
-    arr[0] = mk_issue("cuda cuda", "");
-    arr[1] = mk_issue("segfault in the kernel", "");
-    arr[2] = mk_issue("race condition and a memory leak", "");
+    arr[0] = mk_issue("bounty: cuda cuda", "");
+    arr[1] = mk_issue("bounty: segfault in the kernel", "");
+    arr[2] = mk_issue("bounty: race condition and a memory leak", "");
     CHECK_EQ(prefilter_apply(g_ac, arr, 3), 3);
 
-    /* Exactly at the gate is a keeper, one below is not. */
-    one = mk_issue("performance", "");
-    CHECK_EQ(prefilter_score(g_ac, &one), W_PERFORMANCE);
-    CHECK_EQ(prefilter_apply(g_ac, &one, 1), (W_PERFORMANCE >= KW_SCORE_MIN) ? 1 : 0);
-
-    one = mk_issue("", "");
-    one.labels[0] = "performance";
-    one.n_labels = 1;
-    CHECK_EQ(prefilter_score(g_ac, &one), LABEL(W_PERFORMANCE));
+    /* The gate is inclusive: "bounty" scores exactly KW_SCORE_MIN and is kept.
+     * Asserting the equality too, so re-tuning the gate without re-tuning the
+     * bounty weight fails here rather than silently dropping funded issues. */
+    one = mk_issue("bounty", "");
+    CHECK_EQ(prefilter_score(g_ac, &one), W_BOUNTY);
+    CHECK_EQ(W_BOUNTY, KW_SCORE_MIN);
     CHECK_EQ(prefilter_apply(g_ac, &one, 1), 1);
+
+    /* Just below the gate is dropped. */
+    one = mk_issue("cuda kernel performance", "");
+    CHECK(prefilter_score(g_ac, &one) < KW_SCORE_MIN);
+    CHECK_EQ(prefilter_apply(g_ac, &one, 1), 0);
 }
 
 /*
