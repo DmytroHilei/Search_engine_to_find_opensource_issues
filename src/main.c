@@ -59,6 +59,23 @@ static void usage(const char *argv0)
 }
 
 /*
+ * Committing state is what makes a cycle irreversible, so a dry run must not do
+ * it. --dry-run exists to tune keyword weights over repeated passes across the
+ * same issues (CONTEXT.md section 13); advancing the watermark would move
+ * `since=` past them and hand every tuning pass a different, smaller sample.
+ * This mirrors notify.c, which does not mark the seen-set on a dry run either.
+ */
+static int commit_cycle(state_t *st, int dry_run)
+{
+    if (dry_run) {
+        LOGD("dry-run: leaving watermarks and etags untouched");
+        return 0;
+    }
+    gh_commit_watermarks(st);
+    return state_flush(st);
+}
+
+/*
  * One poll cycle. Everything transient comes from `cycle`, which the caller
  * resets afterwards -- that reset is the only deallocation in the program.
  */
@@ -77,16 +94,13 @@ static int run_cycle(arena_t *cycle, state_t *st, const ac_t *ac, int dry_run)
     if (n == 0) {
         /* Nothing changed anywhere -- all 304s. Still commit, so the
          * watermarks advance past a quiet interval. */
-        gh_commit_watermarks(st);
-        return state_flush(st);
+        return commit_cycle(st, dry_run);
     }
 
     kept = prefilter_apply(ac, issues, n);
     LOGI("prefilter kept %zu/%zu", kept, n);
-    if (kept == 0) {
-        gh_commit_watermarks(st);
-        return state_flush(st);
-    }
+    if (kept == 0)
+        return commit_cycle(st, dry_run);
 
     if (judge_batch(cycle, issues, kept) != 0) {
         /* Every batch failed: the model is down or unreachable. Do NOT advance
@@ -108,8 +122,7 @@ static int run_cycle(arena_t *cycle, state_t *st, const ac_t *ac, int dry_run)
     /* Only now, after the whole cycle including notification succeeded, may the
      * watermarks and ETags move. A crash before this point re-processes; a
      * commit before this point would silently skip issues forever. */
-    gh_commit_watermarks(st);
-    return state_flush(st);
+    return commit_cycle(st, dry_run);
 }
 
 /* Absolute-time sleep so the schedule cannot drift, interruptible by a signal. */
