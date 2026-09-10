@@ -201,6 +201,11 @@ directly. This is the correct answer to your requirement.
 Cap at `NOTIFY_MAX_PER_CYCLE` (e.g. 10), sorted by score descending, so a repo
 that had a bad night can't dump 200 pushes on you.
 
+That cap turned out to be the wrong shape of answer — ten pushes a cycle is
+still eighty a day, and a push is an event that cannot be re-read. With
+`NOTIFY_SUMMARY_ONLY` the per-issue pushes collapse into one summary per cycle
+whose `Click:` opens the ranked board. See section 14.
+
 ## 9. Scheduling — and a recommendation you should take
 
 You asked for a daemon. Support it, but the better default is a **systemd user
@@ -252,87 +257,16 @@ matching, an embedded database.
 
 ## 11. `config.h` — the whole configuration surface
 
-```c
-#ifndef CONFIG_H
-#define CONFIG_H
+Read [src/config.h](src/config.h). It is the only file you edit, every macro in
+it carries the comment explaining what it is for, and several of the numbers
+there are tuned against measured payloads rather than guessed.
 
-/* ---- scheduling ---- */
-#define POLL_INTERVAL_SEC      (3 * 3600)
-#define POLL_JITTER_SEC        600
+This section used to embed a copy of that file. The copy went stale within two
+commits — it still showed `KW_SCORE_MIN 6` after the gate was retuned to 24
+against a real 179-issue sample, the pre-bounty repo list, and a 4 MB
+`ARENA_SIZE` that a real first run exhausted. A second copy of a file that
+changes is a liability, not documentation, so there is now exactly one.
 
-/* ---- repos to watch ---- */
-#define WATCHED_REPOS \
-    X("ggml-org/llama.cpp")     \
-    X("NVIDIA/cutlass")         \
-    X("triton-lang/triton")     \
-    X("pytorch/pytorch")        \
-    X("openai/tiktoken")
-/* used as:  #define X(r) r,   static const char *REPOS[] = { WATCHED_REPOS }; */
-
-/* ---- what you care about (goes into the LLM system prompt) ---- */
-#define USER_PROFILE \
-    "C/C++ and CUDA developer, HPC and GPU kernels. Interested in: "        \
-    "performance regressions, kernel optimization, numerical correctness, " \
-    "memory/allocator bugs, build system issues on Linux. "                 \
-    "Not interested in: docs, typos, Windows/macOS-only, JS/Python "        \
-    "packaging, dependency bumps, feature requests without a design."
-
-/* ---- keyword prefilter ---- */
-typedef struct { const char *term; int weight; int label_only; } kw_t;
-static const kw_t KEYWORDS[] = {
-    /* high signal labels */
-    { "good first issue",   6, 1 },
-    { "help wanted",        5, 1 },
-    { "performance",        4, 0 },
-    /* topical */
-    { "cuda",               5, 0 },
-    { "kernel",             3, 0 },
-    { "race condition",     4, 0 },
-    { "memory leak",        4, 0 },
-    { "segfault",           4, 0 },
-    { "regression",         3, 0 },
-    { "undefined behavior", 4, 0 },
-    /* negative */
-    { "dependabot",       -10, 0 },
-    { "[bot]",            -10, 0 },
-    { "bump version",      -8, 0 },
-    { "typo",              -6, 0 },
-    { "translation",       -6, 0 },
-};
-#define KW_SCORE_MIN           6
-#define KW_COUNT_CAP           3   /* stop rewarding the same word repeating */
-#define KW_LABEL_MULTIPLIER    2
-
-/* ---- judging ---- */
-#define JUDGE_LOCAL  0
-#define JUDGE_API    1
-#define JUDGE_HYBRID 2
-#define JUDGE_MODE             JUDGE_LOCAL
-
-#define OLLAMA_URL   "http://127.0.0.1:11434/api/chat"
-#define OLLAMA_MODEL "qwen3:4b"
-#define OLLAMA_NUM_GPU         999   /* 0 = pure CPU */
-#define ANTHROPIC_MODEL        "claude-haiku-4-5-20251001"
-
-#define LLM_BATCH_SIZE         8
-#define LLM_BODY_TRUNC         1200
-#define LLM_SCORE_MIN          6     /* 0..10 from the model */
-#define LLM_TIMEOUT_SEC        120
-
-/* ---- notifications ---- */
-#define NTFY_SERVER            "https://ntfy.sh"
-#define NTFY_TOPIC             "REPLACE_ME_WITH_RANDOM_HEX"
-#define NOTIFY_MAX_PER_CYCLE   10
-#define NOTIFY_ON_UPDATE       0
-
-/* ---- resources ---- */
-#define SEEN_CAPACITY          65536
-#define ARENA_SIZE             (4u << 20)
-#define HTTP_MAX_CONCURRENT    8
-#define RL_RESERVE             100
-
-#endif /* CONFIG_H */
-```
 
 ## 12. Secrets
 
@@ -353,3 +287,87 @@ unit use `EnvironmentFile=%h/.config/issuewatch/env` with mode `0600`.
   iterations before the signal-to-noise is right.
 - Whether discovery mode is worth building at all. Probably not until watch
   mode has been running for a month.
+
+## 14. The ranked board
+
+Sections 7 and 8 describe a program that sends *events*. Ten pushes a cycle,
+eight cycles a day, ordered by whenever they happened to arrive, and a seen-set
+that is permanent — so an issue glanced at over breakfast is gone forever even
+though the bounty on it is still unclaimed at 15:00. For the Tenstorrent repos
+that is the entire game: every open bounty is assigned within 2-4 days, and a
+pull request only counts if you held the assignment first.
+
+What the user actually wants is *state*: one board, re-ranked every cycle,
+showing what is still open and still worth doing. The pushes collapse into a
+single summary whose `Click:` opens it.
+
+### Why a gist
+
+A dashboard has to be reachable from a phone over the internet, with no cable,
+no Bluetooth pairing and nothing to operate. The options were a static site
+(needs hosting), a self-hosted page (needs a box and a domain), an ntfy message
+with the whole board in it (unreadable, and re-sent whole every cycle), or a
+secret GitHub Gist PATCHed over the API.
+
+The gist wins on the dependency ledger, which is the ledger this project cares
+about: it reuses `GH_TOKEN`, reuses `net/http.c`, adds no dependency, no
+hosting, and no new secret. It renders Markdown on the phone for free. The cost
+is two things, both accepted: the token needs `gist` scope, and the gist id
+lives in `config.h`.
+
+### Retention: closed or assigned, not "seen"
+
+An entry leaves the board when GitHub says it is closed or somebody is assigned
+to it. Not when the user has looked at it — looking at something does not make
+it done.
+
+That rule is what forces the re-check pass, and the re-check pass has no
+precedent elsewhere in the program. The main fetch is
+`state=open&since=<watermark>`: deltas only, so **nothing in it would ever tell
+us that an issue closed or got assigned**. Without a second pass the board
+quietly rots into a list of bounties somebody else is already being paid for.
+
+Flipping the main fetch to `state=all` was rejected. pytorch alone closes issues
+constantly; that traffic would blow past both the 900-issue cap and the cycle
+arena, to learn one bit about at most 200 issues.
+
+So: one conditional `GET /repos/{o}/{r}/issues/{n}` per board entry that this
+cycle's fetch did not already refresh, batched through the existing multiplexed
+path, each carrying the per-issue ETag stored on the entry. A `304` is the
+common case and costs no rate limit. The budget is <=200 conditional GETs eight
+times a day against 5000/hr authenticated — noise.
+
+The drop rules matter more than they look:
+
+| Result | Action | Why |
+| --- | --- | --- |
+| `304` | keep | nothing changed; free |
+| `200`, still open and unassigned | refresh | score, title, etag, updated_at |
+| `200`, closed or assigned | drop, mark seen | somebody else has it |
+| `404` | drop | deleted or transferred |
+| transport failure | **keep unchanged** | a network blip must not empty the board |
+
+Dropped ids go into the existing seen-set, which is what stops an assigned issue
+from being re-added by the next fetch and dropped again on the next re-check,
+flapping on and off the board forever.
+
+### Failure semantics
+
+Publishing is now the cycle's primary output, so rule 4 covers it the way it
+covered notification: a failed gist PATCH must not advance the watermark. The
+merge is keyed by issue id and is therefore idempotent, so re-running a failed
+cycle is safe rather than duplicative.
+
+`--dry-run` prints the rendered board and writes nothing at all: no gist PATCH,
+no ntfy POST, no `board.tsv`, no watermark. That is asserted structurally by a
+call counter in each module, not by reading the code.
+
+### The file format trap
+
+`board.tsv` sits next to the etag cache and is rewritten by the same atomic
+dance (`core/fileio.c`: temp file, fsync, rename). It is TSV, and GitHub issue
+titles contain tabs, newlines, backslashes, emoji and CJK — so title, why and
+url are escaped on write and unescaped on read, and the round trip over
+adversarial titles is a required test, not a nice-to-have. A line that fails to
+parse is skipped, never fatal: losing one row costs one row, aborting the load
+costs the whole board.
