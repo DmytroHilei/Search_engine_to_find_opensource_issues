@@ -95,13 +95,65 @@ static void sb_printf(sbuf_t *sb, const char *fmt, ...)
 /* ---------------------------------------------------------------- escaping */
 
 /*
+ * Length of the valid UTF-8 sequence starting at `s`, or 0 if there is not one.
+ * Rejects overlong encodings, surrogates and anything past U+10FFFF, so the
+ * only thing that reaches the caller is a code point that will survive a JSON
+ * encoder.
+ *
+ * This exists because the board's text fields are fixed-size char arrays filled
+ * by whoever built the entry, and a byte-wise truncation lands in the middle of
+ * a character roughly three times out of four for emoji. yyjson refuses to
+ * encode invalid UTF-8, which would turn one clipped title into a cycle with no
+ * published board at all -- the loudest possible failure for the quietest
+ * possible cause.
+ */
+static size_t utf8_seq_len(const unsigned char *s, size_t avail)
+{
+    unsigned char c = s[0];
+    size_t need;
+    unsigned char lo = 0x80, hi = 0xbf;
+    size_t i;
+
+    if (c < 0x80u)
+        return 1;
+    if (c >= 0xc2u && c <= 0xdfu) {
+        need = 2;
+    } else if (c >= 0xe0u && c <= 0xefu) {
+        need = 3;
+        if (c == 0xe0u)
+            lo = 0xa0;              /* no overlong 3-byte forms */
+        else if (c == 0xedu)
+            hi = 0x9f;              /* no UTF-16 surrogates */
+    } else if (c >= 0xf0u && c <= 0xf4u) {
+        need = 4;
+        if (c == 0xf0u)
+            lo = 0x90;              /* no overlong 4-byte forms */
+        else if (c == 0xf4u)
+            hi = 0x8f;              /* nothing above U+10FFFF */
+    } else {
+        return 0;                   /* a bare continuation byte, or 0xc0/0xc1/0xf5+ */
+    }
+
+    if (avail < need)
+        return 0;
+    if (s[1] < lo || s[1] > hi)
+        return 0;
+    for (i = 2; i < need; i++) {
+        if (s[i] < 0x80u || s[i] > 0xbfu)
+            return 0;
+    }
+    return need;
+}
+
+/*
  * Markdown-safe text for inside a table cell. `max` bounds the read because the
  * caller hands us a fixed char array, not a promise of a NUL.
  *
- * Multi-byte UTF-8 is copied through untouched: every byte of a continuation
- * sequence has the high bit set, so it can never collide with an ASCII
- * metacharacter, and emoji and CJK render fine in a gist body (CLAUDE.md rule 5
- * is about ntfy *headers*).
+ * Well-formed multi-byte UTF-8 is copied through untouched -- every byte of a
+ * continuation sequence has the high bit set, so it can never collide with an
+ * ASCII metacharacter, and emoji and CJK render fine in a gist body (CLAUDE.md
+ * rule 5 is about ntfy *headers*). A malformed sequence is dropped rather than
+ * copied, which costs one character of one title instead of the whole publish.
  */
 static void sb_put_md_text(sbuf_t *sb, const char *s, size_t max)
 {
@@ -109,6 +161,18 @@ static void sb_put_md_text(sbuf_t *sb, const char *s, size_t max)
 
     for (i = 0; i < max && s[i] != '\0'; i++) {
         unsigned char c = (unsigned char)s[i];
+
+        if (c >= 0x80u) {
+            size_t seq = utf8_seq_len((const unsigned char *)s + i, max - i);
+            size_t k;
+
+            if (seq == 0)
+                continue;           /* clipped or invalid: drop this byte */
+            for (k = 0; k < seq; k++)
+                sb_putc(sb, s[i + k]);
+            i += seq - 1;
+            continue;
+        }
 
         switch (c) {
         /* A newline does not break one cell, it terminates the whole table. */
@@ -160,6 +224,11 @@ static void sb_put_md_text(sbuf_t *sb, const char *s, size_t max)
  * A link destination. Only the characters that would end the destination early
  * are percent-encoded; '%' is deliberately passed through so an already-encoded
  * GitHub URL is not double-encoded into a dead link.
+ *
+ * Every byte above 0x7f is percent-encoded too, which is what a URL is supposed
+ * to carry anyway. That is not cosmetic: a clipped html_url would otherwise
+ * leave a half code point in the document, and yyjson would refuse to encode
+ * the whole board over it.
  */
 static void sb_put_md_url(sbuf_t *sb, const char *s, size_t max)
 {
@@ -169,8 +238,8 @@ static void sb_put_md_url(sbuf_t *sb, const char *s, size_t max)
     for (i = 0; i < max && s[i] != '\0'; i++) {
         unsigned char c = (unsigned char)s[i];
 
-        if (c <= 0x20u || c == 0x7fu || c == '(' || c == ')' || c == '<' ||
-            c == '>' || c == '"' || c == '`' || c == '\\' || c == '|') {
+        if (c >= 0x80u || c <= 0x20u || c == 0x7fu || c == '(' || c == ')' ||
+            c == '<' || c == '>' || c == '"' || c == '`' || c == '\\' || c == '|') {
             sb_putc(sb, '%');
             sb_putc(sb, HEX[(c >> 4) & 0xfu]);
             sb_putc(sb, HEX[c & 0xfu]);

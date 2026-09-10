@@ -4,8 +4,9 @@ issuewatch
 # mirrored under build/. Nothing is written into src/ or tests/ any more.
 build/
 
-# Per-machine tool settings, not project config.
+# Per-machine tool settings, and the scratch worktrees agents run in.
 .claude/settings.local.json
+.claude/worktrees/
 
 # Never commit a token. CLAUDE.md: no secrets in tracked files.
 env
