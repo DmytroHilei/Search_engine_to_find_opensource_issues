@@ -120,6 +120,7 @@ static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac
     issue_t *issues = NULL;
     const char *markdown;
     time_t now = time(NULL);
+    time_t t_start = now, t_phase, t_fetch = 0, t_judge = 0;
     size_t n = 0, kept = 0, judged = 0, n_new = 0, expired;
     int sent, dropped, judge_failed = 0;
 
@@ -128,11 +129,14 @@ static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac
         return -1;
     }
 
+    t_phase = time(NULL);
     if (gh_fetch_all(cycle, st, REPOS, N_REPOS, &issues, &n) != 0) {
         LOGE("fetch failed, abandoning cycle");
         return -1;
     }
+    t_fetch = time(NULL) - t_phase;
     LOGI("fetched %zu candidate issues", n);
+    t_phase = time(NULL);
 
     if (n > 0) {
         /* Before the prefilter, not after: an issue somebody already holds is
@@ -162,9 +166,13 @@ static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac
             LOGE("judge failed for every batch, not advancing watermarks");
             judge_failed = 1;
         } else {
+            /* Before judge_apply(), which compacts the sub-threshold ones away
+             * and takes the distribution with them. */
+            judge_log_scores(issues, kept);
             judged = judge_apply(issues, kept);
             LOGI("judge kept %zu/%zu", judged, kept);
         }
+        t_judge = time(NULL) - t_phase;
     }
 
     board_clear_fresh(board);
@@ -206,6 +214,20 @@ static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac
         return -1;
     }
     LOGI("notified %d", sent);
+
+    /*
+     * One line that says what the cycle did end to end, because the per-phase
+     * lines above are interleaved with warnings and a reader weeks later is
+     * asking one question: why did or did not my phone buzz. Timings are here
+     * too -- the judge dominates a cycle by an order of magnitude, and that is
+     * only obvious when the numbers sit next to each other.
+     */
+    LOGI("cycle: %zu fetched -> %zu prefiltered -> %zu judged -> board %zu "
+         "(+%zu new, -%d dropped, -%zu expired) -> %d push(es) in %llds "
+         "(fetch %llds, judge %llds)%s",
+         n, kept, judged, board->n, n_new, dropped, expired, sent,
+         (long long)(time(NULL) - t_start), (long long)t_fetch,
+         (long long)t_judge, dry_run ? " [dry-run, nothing written]" : "");
 
     if (!dry_run) {
         int rc = board_flush(board);

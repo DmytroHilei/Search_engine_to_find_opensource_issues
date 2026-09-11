@@ -32,6 +32,16 @@ int judge_batch(arena_t *a, issue_t *issues, size_t n);
 size_t judge_apply(issue_t *issues, size_t n);
 
 /*
+ * Logs the score distribution over `issues`, plus how many cleared
+ * LLM_SCORE_MIN. Call before judge_apply(), which compacts the losers away.
+ *
+ * Exists because the kept/total count alone cannot distinguish "the model
+ * scored everything 5 and the threshold is one too high" from "these really
+ * were noise" -- and those need opposite responses.
+ */
+void judge_log_scores(const issue_t *issues, size_t n);
+
+/*
  * Truncates `body` to LLM_BODY_TRUNC keeping LLM_BODY_HEAD leading bytes and the
  * tail, with an elision marker between -- the tail usually holds the actual
  * question, the middle is a 40 KB stack trace. Arena-allocated result.

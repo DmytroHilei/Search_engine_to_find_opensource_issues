@@ -1097,6 +1097,52 @@ static int verdict_cmp(const void *pa, const void *pb)
     return 0;
 }
 
+void judge_log_scores(const issue_t *issues, size_t n)
+{
+    int hist[12];                       /* 0..10, plus [11] for "no verdict" */
+    char line[160];
+    size_t i, off = 0, kept = 0;
+    int s;
+
+    if (issues == NULL || n == 0)
+        return;
+
+    memset(hist, 0, sizeof hist);
+    for (i = 0; i < n; i++) {
+        s = issues[i].llm_score;
+        if (s < 0)
+            hist[11]++;
+        else
+            hist[s > 10 ? 10 : s]++;
+        if (s >= LLM_SCORE_MIN)
+            kept++;
+    }
+
+    for (s = 0; s <= 10 && off < sizeof line - 12; s++) {
+        int w;
+
+        if (hist[s] == 0)
+            continue;
+        w = snprintf(line + off, sizeof line - off, "%s%d:%d",
+                     off > 0 ? " " : "", s, hist[s]);
+        if (w < 0 || (size_t)w >= sizeof line - off)
+            break;
+        off += (size_t)w;
+    }
+    if (off == 0)
+        snprintf(line, sizeof line, "(none)");
+
+    /*
+     * The histogram, not just the count. "judge kept 0/74" cannot tell you
+     * whether the model scored everything a 5 -- one short of LLM_SCORE_MIN,
+     * so the threshold is wrong -- or a 0, so the candidates genuinely were
+     * noise. Those call for opposite responses and the bare count hides which.
+     */
+    LOGI("judge scores: %s  (>=%d kept: %zu of %zu)", line, LLM_SCORE_MIN, kept, n);
+    if (hist[11] > 0)
+        LOGW("judge: %d issue(s) came back with no verdict at all", hist[11]);
+}
+
 size_t judge_apply(issue_t *issues, size_t n)
 {
     size_t i, k = 0;

@@ -482,6 +482,22 @@ static size_t gh_backfill_sweep(arena_t *a, state_t *st, const char *auth,
     rs = &st->repos[idx];
     first_page = rs->backfill_page > 0 ? rs->backfill_page : 1;
 
+    /*
+     * Coverage, not just this step. The sweep visits one repo per cycle, so
+     * "has the backfill reached tinygrad yet" is a question about the whole
+     * rotation and a per-cycle line cannot answer it. Without this the only way
+     * to know was to read the etag file by hand.
+     */
+    {
+        size_t swept = 0;
+
+        for (i = 0; i < n_repos; i++)
+            if (st->repos[i].backfill_round > 0)
+                swept++;
+        LOGI("backfill: sweeping %s from page %d (%zu/%zu repos fully swept "
+             "at least once)", rs->repo, first_page, swept, n_repos);
+    }
+
     hdrs  = arena_calloc(a, GH_N_BASE_HDRS + 2, sizeof *hdrs);
     reqs  = arena_calloc(a, GH_BACKFILL_PAGES, sizeof *reqs);
     resps = arena_calloc(a, GH_BACKFILL_PAGES, sizeof *resps);
@@ -965,6 +981,28 @@ done:
      */
     if (n_issues < cap)
         n_issues += gh_backfill_sweep(a, st, auth, issues + n_issues, cap - n_issues);
+
+    /*
+     * Per-repo breakdown, at DEBUG so a healthy cycle stays three lines.
+     *
+     * Nothing used to say how the shared buffer was divided up, which is how a
+     * starved repo looked identical to a quiet one: tinygrad contributing zero
+     * issues because tt-metal had taken the whole pot read exactly like
+     * tinygrad having nothing new. `304` is the same shape of invisible -- a
+     * repo can be silent for a week and that is correct, but only if you can
+     * see it was asked.
+     */
+    if (log_get_level() >= LOG_DEBUG) {
+        for (i = 0; i < n_ctx; i++) {
+            gh_ctx_t *c = &ctx[i];
+
+            LOGD("  %-28s %3zu issue(s)%s%s", c->repo, c->n_kept,
+                 c->fetched ? "" : " (not modified)",
+                 c->no_stage ? " [capped, watermark held]" : "");
+        }
+    }
+    if (rl_low >= 0)
+        LOGI("github: rate limit %ld remaining (reserve %d)", rl_low, RL_RESERVE);
 
     *out = issues;
     *n_out = n_issues;

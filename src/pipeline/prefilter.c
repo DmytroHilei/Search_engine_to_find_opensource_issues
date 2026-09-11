@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "core/util.h"
 
 #define AC_NIL (-1)
 
@@ -333,18 +334,35 @@ int prefilter_score_text(const ac_t *ac, const char *text, int is_label)
 
 size_t prefilter_apply(const ac_t *ac, issue_t *issues, size_t n)
 {
-    size_t i, keep = 0;
+    size_t i, keep = 0, near = 0;
+    int best_dropped = 0;
 
     if (ac == NULL || issues == NULL)
         return 0;
 
     for (i = 0; i < n; i++) {
         issues[i].kw_score = prefilter_score(ac, &issues[i]);
-        if (issues[i].kw_score < KW_SCORE_MIN)
+        if (issues[i].kw_score < KW_SCORE_MIN) {
+            /*
+             * KW_SCORE_MIN is the one number in config.h that has to be re-tuned
+             * by hand after any KEYWORDS[] edit, and nothing reported whether it
+             * sat in empty space or right on top of a cluster. A pile of issues
+             * one point short is the signal that the gate, not the corpus, is
+             * what is keeping the board empty.
+             */
+            if (issues[i].kw_score > best_dropped)
+                best_dropped = issues[i].kw_score;
+            if (issues[i].kw_score >= KW_SCORE_MIN * 3 / 4)
+                near++;
             continue;
+        }
         if (keep != i)
             issues[keep] = issues[i];  /* stable compaction, order preserved */
         keep++;
     }
+
+    if (n > 0)
+        LOGI("prefilter: %zu kept at >=%d, %zu near miss (>=%d), best dropped %d",
+             keep, KW_SCORE_MIN, near, KW_SCORE_MIN * 3 / 4, best_dropped);
     return keep;
 }
