@@ -315,6 +315,24 @@ static const kw_t KEYWORDS[] = {
 #define GH_BACKFILL_PAGES      3     /* pages per cycle, for one repo */
 #define GH_BACKFILL_REPOS      1     /* repos swept per cycle */
 /*
+ * Last page `page=` can address. GitHub serves offset pagination only to 10000
+ * items and answers 422 past it -- "please use cursor based pagination" -- so
+ * page 100 is a wall, not a short page. Measured: page 99 answers, page 100
+ * does not, on every repo large enough to reach it.
+ *
+ * The sweep wraps here rather than pushing into the 422, because a failure
+ * leaves the cursor unstaged and the same pages would be retried forever; and
+ * since a stalled repo keeps backfill_round at 0 it would stay the minimum of
+ * (round, page) and be picked every cycle, taking the whole rotation down with
+ * it. pytorch alone has over 8000 open unassigned issues and reaches this.
+ *
+ * The cost is honest and bounded: issues past 10000 in creation order are not
+ * reachable by the backfill. They are still fetched by the delta whenever they
+ * are touched. Covering them properly means cursor pagination and an opaque
+ * cursor in the state file instead of an int.
+ */
+#define GH_BACKFILL_LAST_PAGE  99
+/*
  * Sanity bound on a cursor read back from disk, not a depth limit: the sweep
  * stops when GitHub returns a short page, long before this. It exists so a
  * corrupted digit cannot send the fetch to page 2000000000.

@@ -481,6 +481,9 @@ static size_t gh_backfill_sweep(arena_t *a, state_t *st, const char *auth,
 
     rs = &st->repos[idx];
     first_page = rs->backfill_page > 0 ? rs->backfill_page : 1;
+    /* Wrap before the wall rather than spending a request to be told about it. */
+    if (first_page > GH_BACKFILL_LAST_PAGE)
+        first_page = 1;
 
     /*
      * Coverage, not just this step. The sweep visits one repo per cycle, so
@@ -546,6 +549,20 @@ static size_t gh_backfill_sweep(arena_t *a, state_t *st, const char *auth,
         int parsed;
 
         if (r->status != 200) {
+            /*
+             * 422 is the offset-pagination wall, not an error to retry: GitHub
+             * refuses `page=` past 10000 items. Treat it exactly like the end
+             * of the backlog so the cursor wraps. Retrying would re-request the
+             * same rejected page every cycle, and the repo would keep round 0
+             * and so stay the pick, stalling the rotation for every repo.
+             */
+            if (r->status == 422) {
+                LOGI("backfill: %s reached the offset-pagination limit at page "
+                     "%d; wrapping (issues past it need the delta fetch)",
+                     rs->repo, first_page + (int)i);
+                short_page = 1;
+                break;
+            }
             if (r->status == 0)
                 LOGW("backfill: %s page %d transport failure", rs->repo,
                      first_page + (int)i);
