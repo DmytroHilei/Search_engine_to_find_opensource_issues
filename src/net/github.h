@@ -60,6 +60,23 @@ void gh_commit_watermarks(state_t *st);
 void gh_issue_to_board(const issue_t *is, board_entry_t *out);
 
 /*
+ * Compacts the array in place to the issues nobody holds yet, returning the
+ * surviving count. Same shape as prefilter_apply() and judge_apply().
+ *
+ * gh_recheck() drops an entry once GitHub reports it assigned, but it skips
+ * entries this cycle's fetch refreshed, and board_merge() marks everything it
+ * adds as fresh. So an issue that is ALREADY assigned when first seen was
+ * judged, ranked and published without the drop rule ever being consulted --
+ * a claimed $8,000 bounty sat at rank 1 on a real board. This is the intake
+ * half of that rule: the re-check catches issues claimed after they arrive,
+ * this catches the ones claimed before.
+ *
+ * Runs before the prefilter, so an issue nobody can win costs no keyword pass
+ * and no LLM tokens either.
+ */
+size_t gh_drop_assigned(issue_t *issues, size_t n);
+
+/*
  * Re-checks every board entry this cycle's fetch did NOT already refresh, with
  * one conditional GET per issue through the existing batch path.
  *

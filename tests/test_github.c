@@ -647,6 +647,52 @@ static void seed_entry(board_entry_t *e)
            sizeof "https://github.com/tenstorrent/tt-metal/issues/4242");
 }
 
+/*
+ * The intake half of the drop rule. gh_recheck() skips entries the fetch just
+ * refreshed, so an issue that arrives already claimed was never re-checked at
+ * all -- it reached a real board at rank 1 holding an $8,000 bounty somebody
+ * else had been assigned. Order must survive, because the prefilter and judge
+ * that run next both compact the same array.
+ */
+static void test_drop_assigned_compacts_in_order(void)
+{
+    issue_t is[5];
+    size_t n;
+    int i;
+
+    memset(is, 0, sizeof is);
+    for (i = 0; i < 5; i++) {
+        is[i].id = 100 + i;
+        is[i].title = "bounty: sharded matmul returns wrong results";
+    }
+    is[0].assigned = 1;                 /* first */
+    is[2].assigned = 1;                 /* middle */
+    is[4].assigned = 1;                 /* last */
+
+    n = gh_drop_assigned(is, 5);
+
+    CHECK_EQ((long long)n, 2);
+    CHECK_EQ(is[0].id, 101);
+    CHECK_EQ(is[1].id, 103);
+    for (i = 0; i < (int)n; i++)
+        CHECK(is[i].assigned == 0);
+
+    /* Nobody assigned: every issue survives, untouched. */
+    memset(is, 0, sizeof is);
+    for (i = 0; i < 5; i++)
+        is[i].id = 200 + i;
+    CHECK_EQ((long long)gh_drop_assigned(is, 5), 5);
+    CHECK_EQ(is[4].id, 204);
+
+    /* Everybody assigned: the array empties rather than keeping a survivor. */
+    for (i = 0; i < 5; i++)
+        is[i].assigned = 1;
+    CHECK_EQ((long long)gh_drop_assigned(is, 5), 0);
+
+    CHECK_EQ((long long)gh_drop_assigned(NULL, 7), 0);
+    CHECK_EQ((long long)gh_drop_assigned(is, 0), 0);
+}
+
 static void test_issue_to_board_carries_fields(void)
 {
     board_entry_t e;
@@ -1060,6 +1106,7 @@ int main(void)
     TEST_RUN(test_malformed_input);
     TEST_RUN(test_strings_are_arena_copies);
     TEST_RUN(test_token_is_required);
+    TEST_RUN(test_drop_assigned_compacts_in_order);
     TEST_RUN(test_issue_to_board_carries_fields);
     TEST_RUN(test_issue_to_board_truncates_on_utf8_boundaries);
     TEST_RUN(test_recheck_keeps_on_304);

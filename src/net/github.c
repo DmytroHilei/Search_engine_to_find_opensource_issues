@@ -734,6 +734,18 @@ done:
 
 /* --------------------------------------------------------------- the board */
 
+size_t gh_drop_assigned(issue_t *issues, size_t n)
+{
+    size_t i, k = 0;
+
+    if (issues == NULL)
+        return 0;
+    for (i = 0; i < n; i++)
+        if (!issues[i].assigned)
+            issues[k++] = issues[i];
+    return k;
+}
+
 void gh_issue_to_board(const issue_t *is, board_entry_t *out)
 {
     if (out == NULL)

@@ -135,6 +135,16 @@ static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac
     LOGI("fetched %zu candidate issues", n);
 
     if (n > 0) {
+        /* Before the prefilter, not after: an issue somebody already holds is
+         * worth nothing regardless of score, so it should cost no LLM tokens. */
+        size_t open_n = gh_drop_assigned(issues, n);
+
+        if (open_n != n)
+            LOGI("dropped %zu already-assigned issue(s)", n - open_n);
+        n = open_n;
+    }
+
+    if (n > 0) {
         kept = prefilter_apply(ac, issues, n);
         LOGI("prefilter kept %zu/%zu", kept, n);
     }
