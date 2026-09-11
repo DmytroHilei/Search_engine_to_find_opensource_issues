@@ -34,14 +34,28 @@ At minimum, before a real run:
 2. `USER_PROFILE` — what you work on. This goes into the LLM system prompt and
    is the single biggest lever on result quality.
 3. `KEYWORDS[]` — expect a few tuning iterations. Use `--dry-run` for that.
+Those three are committed. The next two are credentials, so they go in
+`src/config.local.h`, which is gitignored — `config.h` includes it if present
+and only defines placeholders for what it did not set:
+
+```sh
+cp src/config.local.h.example src/config.local.h
+```
+
 4. `NTFY_TOPIC` — **replace the default.** Generate one with
-   `openssl rand -hex 16`.
+   `openssl rand -hex 16`. This one is not a label, it is the whole of the
+   authentication; see below.
 5. `GIST_ID` — the board is published here. Create one secret gist, once, and
    paste its id (the hex from the URL, not the whole URL):
 
    ```sh
-   gh gist create --secret -d issuewatch board.md
+   printf '# issuewatch\n' > /tmp/issuewatch-board.md
+   gh gist create -d issuewatch /tmp/issuewatch-board.md
    ```
+
+   Secret is `gh gist create`'s default; `--public` is the opt-out. Seed it
+   under the name `GIST_FILENAME` already uses — the publish PATCHes that one
+   file, so a differently named seed is not replaced, it is joined.
 
    Your `GH_TOKEN` needs `gist` scope for this, which a fine-grained PAT cannot
    grant — use a classic token with `gist` plus public-repo read. Leave
@@ -52,9 +66,15 @@ At minimum, before a real run:
 
 A public ntfy.sh topic is readable *and writable* by anyone who knows its name.
 The read side leaks only public GitHub data, but the write side means anyone who
-guesses your topic can push arbitrary notifications to your phone. Use a long
-random topic, or self-host ntfy with access control and set `NTFY_TOKEN`.
-`notify_init()` refuses to run with the shipped placeholder.
+guesses your topic can push arbitrary notifications to your phone — any title,
+any body, `Priority: 5` so it breaks through Focus. Use a long random topic, or
+self-host ntfy with access control and set `NTFY_TOKEN`. `notify_init()` refuses
+to run with the shipped placeholder.
+
+*Knows* includes reading it here: this repo is public, so a real topic committed
+to `config.h` is a published credential. That is why it lives in the untracked
+`src/config.local.h` instead. Nothing enforces this but the gitignore — check
+`git diff --cached` before a push that touches configuration.
 
 ## Secrets
 
@@ -175,7 +195,8 @@ with the placeholder, and for good reason — see above.
 **2. Create the gist and set `GIST_ID`.**
 
 ```sh
-gh gist create --secret -d issuewatch board.md
+printf '# issuewatch\n' > /tmp/issuewatch-board.md
+gh gist create -d issuewatch /tmp/issuewatch-board.md
 ```
 
 Take the hex id from the URL. The token needs `gist` scope, which means a

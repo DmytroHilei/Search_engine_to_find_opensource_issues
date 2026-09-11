@@ -18,6 +18,12 @@ published to a secret gist, with one summary push to ntfy per cycle. Runs every
 - **All user configuration lives in `src/config.h`** as preprocessor macros.
   There is no runtime config file, no CLI flags for tuning, no env-var
   overrides for behaviour. Env vars are for *secrets only*.
+  The one exception is `src/config.local.h`, which is untracked and holds
+  `NTFY_TOPIC` and `GIST_ID` — still compile-time macros, still no parsing.
+  `config.h` includes it if it exists and `#ifndef`-guards its own copies, so a
+  local value wins. This is not a second config file to extend: put a new
+  tunable in `config.h`, and put a value here only when publishing it would hand
+  someone a capability. See the next bullet for why those two qualify.
 - **Single-threaded.** Concurrency is `curl_multi` + `curl_multi_poll`. Do not
   add `pthread_create`. If you think you need a thread, you are solving the
   wrong problem.
@@ -27,6 +33,14 @@ published to a secret gist, with one summary push to ntfy per cycle. Runs every
 - **No secrets in tracked files.** `GH_TOKEN`, `ANTHROPIC_API_KEY`,
   `NTFY_TOKEN` come from `getenv`. Never write a token into `config.h`, a test
   fixture, a log line, or a commit message.
+  `NTFY_TOPIC` counts as a secret even though it looks like a setting: on
+  ntfy.sh the topic name *is* the authentication, world-readable and
+  world-writable, so a real one in this public repo lets any reader push
+  notifications to the user's phone. `GIST_ID` is milder — a secret gist is
+  unlisted, not private — but still names a page that was not published
+  deliberately. Both live in `src/config.local.h`; `config.h` keeps only the
+  `REPLACE_ME_*` placeholders, and `notify_init()` and `gist_init()` hard-fail
+  on those rather than publishing to an address someone else can read.
 
 ## Dependencies
 

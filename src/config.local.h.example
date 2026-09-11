@@ -1,0 +1,41 @@
+/*
+ * Template. Copy to src/config.local.h and fill in; that path is gitignored.
+ *
+ *     cp src/config.local.h.example src/config.local.h
+ *
+ * config.h includes config.local.h if it exists, before defining anything, and
+ * guards its own versions of these two with #ifndef -- so whatever is set here
+ * wins and nothing else needs to change. Leave the file absent and the build
+ * still compiles; notify_init() and gist_init() then refuse to run rather than
+ * publishing to the shipped placeholder.
+ *
+ * Only credentials belong here. Real tunables -- WATCHED_REPOS, KEYWORDS[],
+ * thresholds -- stay in config.h where they can be committed and reviewed.
+ */
+#ifndef CONFIG_LOCAL_H
+#define CONFIG_LOCAL_H
+
+/*
+ * The topic name is the whole of the authentication on ntfy.sh: no password, no
+ * ownership, world-readable and world-writable by anyone who learns it. A short
+ * or guessable one means strangers can push notifications to your phone.
+ *
+ *     openssl rand -hex 16
+ */
+#define NTFY_TOPIC "REPLACE_ME_WITH_RANDOM_HEX"
+
+/*
+ * The hex id from the gist URL -- the part after your username, nothing else.
+ * Create it once, seeded under the name GIST_FILENAME uses, because the publish
+ * PATCHes that one file and a differently named seed is added beside the board
+ * rather than replaced by it:
+ *
+ *     printf '# issuewatch\n' > /tmp/issuewatch-board.md
+ *     gh gist create -d issuewatch /tmp/issuewatch-board.md
+ *
+ * Secret is the default; --public is the opt-out. GH_TOKEN needs a classic
+ * token with `gist` scope, which a fine-grained PAT cannot grant.
+ */
+#define GIST_ID "REPLACE_ME_WITH_GIST_ID"
+
+#endif /* CONFIG_LOCAL_H */

@@ -5,7 +5,24 @@
  * The only file a user edits. Everything here is a compile-time constant.
  * Secrets never live here -- see GH_TOKEN / ANTHROPIC_API_KEY / NTFY_TOKEN,
  * which are read from the environment at startup.
+ *
+ * Two values sit awkwardly between those categories: NTFY_TOPIC and GIST_ID are
+ * configuration by shape and credentials by consequence. An ntfy.sh topic name
+ * IS the authentication -- anyone who reads it can push to the phone -- and this
+ * repo is public, so committing a real one hands that out. They stay macros, but
+ * the real values go in src/config.local.h, which is untracked. That file is
+ * included first if it exists, and every definition below is a fallback for what
+ * it did not set, so a local override always wins.
+ *
+ * A missing config.local.h is not an error: the placeholders below survive, and
+ * notify_init() and gist_init() both refuse to run on a placeholder rather than
+ * publishing to an address someone else can read.
  */
+#if defined(__has_include)
+#  if __has_include("config.local.h")
+#    include "config.local.h"
+#  endif
+#endif
 
 /* ---- scheduling ---- */
 #define POLL_INTERVAL_SEC      (3 * 3600)
@@ -192,7 +209,11 @@ static const kw_t KEYWORDS[] = {
 
 /* ---- notifications ---- */
 #define NTFY_SERVER            "https://ntfy.sh"
+/* Credential, not a label. Set it in src/config.local.h; see the top of this
+ * file. `openssl rand -hex 16`. */
+#ifndef NTFY_TOPIC
 #define NTFY_TOPIC             "REPLACE_ME_WITH_RANDOM_HEX"
+#endif
 #define NOTIFY_MAX_PER_CYCLE   10
 #define NOTIFY_ON_UPDATE       0
 #define NOTIFY_TIMEOUT_SEC     20
@@ -209,14 +230,20 @@ static const kw_t KEYWORDS[] = {
  * The board is published as a secret GitHub Gist: it reuses GH_TOKEN and
  * net/http.c, adds no dependency and nothing to host. Cost is that the token
  * needs `gist` scope on top of public-repo read -- a fine-grained PAT will not
- * do, gists need a classic token with the gist scope. Create the gist once
- * (any content), then paste its id here:
+ * do, gists need a classic token with the gist scope. Create the gist once,
+ * seeded under GIST_FILENAME -- the publish PATCHes that one file, so a seed
+ * under any other name is added alongside the board rather than replaced by it:
  *
- *     gh gist create --secret -d issuewatch board.md
+ *     printf '# issuewatch\n' > /tmp/issuewatch-board.md
+ *     gh gist create -d issuewatch /tmp/issuewatch-board.md
  *
- * GIST_ID is the hex id from the URL, not the whole URL.
+ * GIST_ID is the hex id from the URL, not the whole URL. It goes in
+ * src/config.local.h, not here: a secret gist is unlisted, not private, so the
+ * id is the only thing keeping the board off a public repo page.
  */
+#ifndef GIST_ID
 #define GIST_ID                "REPLACE_ME_WITH_GIST_ID"
+#endif
 #define GIST_API_BASE          "https://api.github.com/gists"
 #define GIST_WEB_BASE          "https://gist.github.com"
 #define GIST_FILENAME          "issuewatch-board.md"

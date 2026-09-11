@@ -11,3 +11,7 @@ build/
 # Never commit a token. CLAUDE.md: no secrets in tracked files.
 env
 *.env
+
+# The real NTFY_TOPIC and GIST_ID. config.h carries placeholders and includes
+# this if it exists; config.local.h.example is the tracked template.
+src/config.local.h

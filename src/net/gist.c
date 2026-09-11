@@ -125,7 +125,8 @@ int gist_init(void)
 {
     if (gist_id_is_placeholder() || GIST_ID[0] == '\0') {
         LOGE("gist: GIST_ID is still the placeholder. Create the gist once with "
-             "`gh gist create --secret -d issuewatch board.md`, put the hex id "
+             "`gh gist create -d issuewatch /tmp/" GIST_FILENAME "` (seeded under "
+             "that name, which is the file the publish replaces), put the hex id "
              "from its URL in src/config.h and rebuild. GH_TOKEN must be a "
              "classic token with the `gist` scope -- a fine-grained PAT cannot "
              "write gists.");
