@@ -291,9 +291,16 @@ static const kw_t KEYWORDS[] = {
  * per-repo cap is what stops a noisy neighbour starving tinygrad.
  */
 #define GH_REPO_MAX_ISSUES     200
-/* Whole-cycle ceiling, delta and backfill together. ~8.5 KB per issue against
- * a 96 MB arena, so this is ~13 MB and leaves the judge its pools. */
-#define GH_MAX_ISSUES_PER_CYCLE 1500
+/*
+ * Whole-cycle ceiling, delta and backfill together. ~8.5 KB per issue against a
+ * 96 MB arena, so this is ~21 MB and leaves the judge its pools.
+ *
+ * Sized so the backfill still gets its full GH_BACKFILL_PAGES after a busy
+ * delta: the sweep runs last on whatever is left, and at 1500 a heavy delta
+ * could squeeze a 1000-issue sweep down to a few pages -- which would quietly
+ * slow the rotation rather than fail, the worst shape of a limit.
+ */
+#define GH_MAX_ISSUES_PER_CYCLE 2500
 /*
  * ---- rolling backfill ----
  *
@@ -312,7 +319,16 @@ static const kw_t KEYWORDS[] = {
  * and matches gh_drop_assigned(), so the backfill never spends a request on an
  * issue the intake filter would throw away anyway.
  */
-#define GH_BACKFILL_PAGES      3     /* pages per cycle, for one repo */
+/*
+ * Pages per cycle, for one repo. At 3 the rotation needed ~120 cycles -- about
+ * 15 days at POLL_INTERVAL_SEC -- for every repo to finish one pass, and over
+ * half of that was pytorch and vllm alone against the 99-page wall below. 10
+ * brings it to roughly 5 days for 7 more requests a cycle, against a measured
+ * 4870 of rate-limit headroom. The ceiling on it is GH_MAX_ISSUES_PER_CYCLE,
+ * not the API: 10 pages is up to 1000 issues, which the sweep must have room
+ * for after the delta fetch has taken its share.
+ */
+#define GH_BACKFILL_PAGES      10
 #define GH_BACKFILL_REPOS      1     /* repos swept per cycle */
 /*
  * Last page `page=` can address. GitHub serves offset pagination only to 10000
