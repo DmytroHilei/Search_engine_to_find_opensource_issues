@@ -48,6 +48,13 @@ _Static_assert(LLM_BODY_TRUNC > LLM_BODY_HEAD + (int)sizeof ELISION,
 _Static_assert(LLM_BATCH_SIZE > 0, "LLM_BATCH_SIZE must be positive");
 _Static_assert(LLM_WHY_MAX > 0, "LLM_WHY_MAX must be positive");
 
+/*
+ * The payment paragraph is not padding. Labels are already in every prompt, and
+ * a 4B judge still scored two issues carrying no labels at all as bounties --
+ * both reached a real board, one of them ranked above a genuine $8,000 one.
+ * Money is the field the user acts on, so an invented one costs an evening.
+ * State the asymmetry explicitly: the model must under-claim, not guess.
+ */
 #define JUDGE_SYSTEM_PROMPT                                                       \
     "You triage GitHub issues for one developer. Answer only through the "        \
     "structured verdict list.\n"                                                  \
@@ -58,8 +65,14 @@ _Static_assert(LLM_WHY_MAX > 0, "LLM_WHY_MAX must be positive");
     "  6-7  relevant, worth opening\n"                                            \
     "  8-10 strong match: concrete, reproducible, actionable right now\n"          \
     "Set keep=false for anything you would not push to them at all.\n"            \
+    "Payment is a fact you must read, never infer. An issue is paid ONLY if the "  \
+    "title or the labels say so -- an amount, or a label such as `bounty`. If "    \
+    "neither does, it is unpaid: judge it on reputation or interest, and do not " \
+    "call it a bounty. Writing `bounty` about an issue with no bounty is the "     \
+    "worst error you can make here, worse than scoring it too low.\n"              \
     "`why` is one clause of at most 12 words saying what makes it (ir)relevant -- "\
-    "it is the notification body, so no markdown and no preamble.\n"              \
+    "it is the notification body, so no markdown and no preamble. State only "     \
+    "what the payload shows.\n"                                                    \
     "Return exactly one verdict per listed index, using the 0-based index given."
 
 #define SCREEN_SYSTEM_PROMPT                                                      \
