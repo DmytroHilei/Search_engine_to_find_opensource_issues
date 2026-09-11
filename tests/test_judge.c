@@ -23,6 +23,12 @@ extern int judge_extract_ollama_verdicts(arena_t *a, const char *json, size_t js
 extern int judge_extract_anthropic_verdicts(arena_t *a, const char *json, size_t json_len,
                                             const char **out, size_t *out_len);
 
+/* Only built for the Ollama-backed modes; the API path constrains output with a
+ * forced tool call instead of a grammar. */
+#if JUDGE_MODE == JUDGE_LOCAL || JUDGE_MODE == JUDGE_HYBRID
+extern const char *judge_render_format_schema(arena_t *a, size_t n);
+#endif
+
 static arena_t g_arena;
 
 static void issues_reset(issue_t *is, size_t n)
@@ -72,6 +78,38 @@ static int utf8_valid(const char *s, size_t len)
 }
 
 /* ------------------------------------------------------------------ tests */
+
+#if JUDGE_MODE == JUDGE_LOCAL || JUDGE_MODE == JUDGE_HYBRID
+/*
+ * The format schema must pin the verdict array to the batch size. Measured on
+ * qwen3:4b with a batch of 8: unbounded returned exactly 8 verdicts in 4 of 9
+ * trials (three empty arrays, one of length 1, one overrun), bounded in 9 of 9.
+ * A short reply is silently discarded candidates, so the bound is asserted here
+ * rather than trusted to survive a refactor of the schema builders.
+ */
+static void test_format_schema_pins_the_array_length(void)
+{
+    const char *s;
+
+    s = judge_render_format_schema(&g_arena, 8);
+    CHECK(s != NULL);
+    CHECK(strstr(s, "\"minItems\":8") != NULL);
+    CHECK(strstr(s, "\"maxItems\":8") != NULL);
+    /* The item shape must survive alongside the bound. */
+    CHECK(strstr(s, "\"type\":\"array\"") != NULL);
+    CHECK(strstr(s, "\"why\"") != NULL);
+
+    /* It tracks the batch, rather than being LLM_BATCH_SIZE baked in: a final
+     * short batch must ask for its own length, not the full one. */
+    s = judge_render_format_schema(&g_arena, 3);
+    CHECK(s != NULL);
+    CHECK(strstr(s, "\"minItems\":3") != NULL);
+    CHECK(strstr(s, "\"maxItems\":3") != NULL);
+    CHECK(strstr(s, "\"minItems\":8") == NULL);
+
+    CHECK(judge_render_format_schema(NULL, 8) == NULL);
+}
+#endif
 
 static void test_parse_ok(void)
 {
@@ -379,6 +417,9 @@ int main(void)
         return 2;
     }
 
+#if JUDGE_MODE == JUDGE_LOCAL || JUDGE_MODE == JUDGE_HYBRID
+    TEST_RUN(test_format_schema_pins_the_array_length);
+#endif
     TEST_RUN(test_parse_ok);
     TEST_RUN(test_why_is_copied);
     TEST_RUN(test_parse_index_out_of_range);

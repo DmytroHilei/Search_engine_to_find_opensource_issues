@@ -315,14 +315,31 @@ static yyjson_mut_val *verdict_item_schema(yyjson_mut_doc *d)
 
 #if JUDGE_MODE == JUDGE_LOCAL || JUDGE_MODE == JUDGE_HYBRID
 
-static yyjson_mut_val *array_of(yyjson_mut_doc *d, yyjson_mut_val *item)
+/*
+ * An array of exactly `n` items -- the length is the point, not decoration.
+ *
+ * Without the bound an empty array satisfies the schema, and that is the exit a
+ * small model takes: qwen3:4b returned exactly 8 verdicts for a batch of 8 in
+ * 4 of 9 trials, the other five coming back as three empty arrays, one array of
+ * one, and one overrun past the last index. Every short answer is candidates
+ * silently discarded -- lost to the sampler, not to LLM_SCORE_MIN. Pinning the
+ * length made it 9 of 9, because the grammar stops the model closing the array
+ * early rather than asking it not to.
+ *
+ * Bounding the index with minimum/maximum was tried first and is worse than
+ * useless: llama.cpp's schema-to-GBNF conversion handles integer ranges badly
+ * enough that every reply came back empty. Constrain the count, not the value.
+ */
+static yyjson_mut_val *array_of(yyjson_mut_doc *d, yyjson_mut_val *item, size_t n)
 {
     yyjson_mut_val *arr = yyjson_mut_obj(d);
 
     if (arr == NULL || item == NULL)
         return NULL;
     if (!yyjson_mut_obj_add_str(d, arr, "type", "array") ||
-        !yyjson_mut_obj_add_val(d, arr, "items", item))
+        !yyjson_mut_obj_add_val(d, arr, "items", item) ||
+        !yyjson_mut_obj_add_uint(d, arr, "minItems", (uint64_t)n) ||
+        !yyjson_mut_obj_add_uint(d, arr, "maxItems", (uint64_t)n))
         return NULL;
     return arr;
 }
@@ -333,8 +350,8 @@ static yyjson_mut_val *array_of(yyjson_mut_doc *d, yyjson_mut_val *item)
  */
 static int ollama_post(arena_t *a, void *pool, const char *model,
                        const char *system, const char *user,
-                       yyjson_mut_val *(*schema)(yyjson_mut_doc *),
-                       http_resp_t *resp)
+                       yyjson_mut_val *(*schema)(yyjson_mut_doc *, size_t),
+                       size_t n_items, http_resp_t *resp)
 {
     static const char *const hdrs[] = { "Content-Type: application/json", NULL };
     yyjson_alc alc;
@@ -360,7 +377,7 @@ static int ollama_post(arena_t *a, void *pool, const char *model,
     opts   = yyjson_mut_obj(doc);
     sys_m  = yyjson_mut_obj(doc);
     usr_m  = yyjson_mut_obj(doc);
-    fmt    = schema(doc);
+    fmt    = schema(doc, n_items);
     if (root == NULL || msgs == NULL || opts == NULL || sys_m == NULL ||
         usr_m == NULL || fmt == NULL)
         return -1;
@@ -421,10 +438,38 @@ static int ollama_post(arena_t *a, void *pool, const char *model,
 
 #if JUDGE_MODE == JUDGE_LOCAL
 
-/* Ollama "format": a bare array of full verdicts. */
-static yyjson_mut_val *ollama_verdict_schema(yyjson_mut_doc *d)
+/* Ollama "format": exactly one full verdict per issue in the batch. */
+static yyjson_mut_val *ollama_verdict_schema(yyjson_mut_doc *d, size_t n)
 {
-    return array_of(d, verdict_item_schema(d));
+    return array_of(d, verdict_item_schema(d), n);
+}
+
+/*
+ * Exposed (not in judge.h) so the schema test can drive the real builder, the
+ * way gist.c exposes gist_build_body(). The array bound is the whole of the
+ * short-batch fix and nothing downstream can detect its absence: a schema that
+ * quietly allows an empty reply produces a thin board, never an error.
+ */
+const char *judge_render_format_schema(arena_t *a, size_t n)
+{
+    yyjson_alc alc;
+    yyjson_mut_doc *doc;
+    yyjson_mut_val *fmt;
+    void *pool;
+
+    if (a == NULL)
+        return NULL;
+    pool = arena_alloc(a, JUDGE_POOL_BYTES, 16);
+    if (pool == NULL || !yyjson_alc_pool_init(&alc, pool, JUDGE_POOL_BYTES))
+        return NULL;
+    doc = yyjson_mut_doc_new(&alc);
+    if (doc == NULL)
+        return NULL;
+    fmt = ollama_verdict_schema(doc, n);
+    if (fmt == NULL)
+        return NULL;
+    yyjson_mut_doc_set_root(doc, fmt);
+    return yyjson_mut_write_opts(doc, YYJSON_WRITE_NOFLAG, &alc, NULL, NULL);
 }
 
 static int ollama_full_batch(arena_t *a, void *pool, issue_t *issues, size_t n,
@@ -439,7 +484,7 @@ static int ollama_full_batch(arena_t *a, void *pool, issue_t *issues, size_t n,
     if (prompt == NULL)
         return -1;
     if (ollama_post(a, pool, OLLAMA_MODEL, JUDGE_SYSTEM_PROMPT, prompt,
-                    ollama_verdict_schema, &resp) < 0)
+                    ollama_verdict_schema, n, &resp) < 0)
         return -1;
     if (judge_extract_ollama_verdicts(a, resp.body, resp.body_len, &verdicts, &vlen) < 0)
         return -1;
@@ -480,9 +525,9 @@ static yyjson_mut_val *screen_item_schema(yyjson_mut_doc *d)
     return item;
 }
 
-static yyjson_mut_val *screen_schema(yyjson_mut_doc *d)
+static yyjson_mut_val *screen_schema(yyjson_mut_doc *d, size_t n)
 {
-    return array_of(d, screen_item_schema(d));
+    return array_of(d, screen_item_schema(d), n);
 }
 
 /* Fills keep[0..n) from a screening reply. Returns the number of decisions. */
@@ -533,7 +578,7 @@ static int ollama_screen(arena_t *a, void *pool, issue_t *issues, size_t n,
     if (prompt == NULL)
         return -1;
     if (ollama_post(a, pool, OLLAMA_SCREEN_MODEL, SCREEN_SYSTEM_PROMPT, prompt,
-                    screen_schema, &resp) < 0)
+                    screen_schema, n, &resp) < 0)
         return -1;
     if (judge_extract_ollama_verdicts(a, resp.body, resp.body_len, &verdicts, &vlen) < 0)
         return -1;
