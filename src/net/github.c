@@ -43,6 +43,15 @@ static const char *const gh_base_hdrs[] = {
 static char g_stage_wm[STATE_REPO_MAX][32];
 static char g_stage_etag[STATE_REPO_MAX][HTTP_ETAG_MAX];
 static int  g_stage_valid[STATE_REPO_MAX];
+/*
+ * The backfill cursor stages separately from the watermark: a repo can have a
+ * failed delta fetch and a clean sweep in the same cycle, or the reverse, and
+ * collapsing them would let one failure discard the other's progress. Both are
+ * still committed together, after the cycle has fully succeeded (rule 4).
+ */
+static int  g_stage_bf[STATE_REPO_MAX];
+static int  g_stage_bf_round[STATE_REPO_MAX];
+static int  g_stage_bf_valid[STATE_REPO_MAX];
 
 /* Per-repo scratch for one gh_fetch_all() call. Lives in the cycle arena. */
 typedef struct {
@@ -51,6 +60,7 @@ typedef struct {
     int want_next;                  /* a further page was requested */
     int fetched;                    /* at least one 200 parsed cleanly */
     int no_stage;                   /* something went wrong -- do not advance */
+    size_t n_kept;                  /* issues this repo has taken from the buffer */
     char next_url[GH_URL_MAX];
     char newest[32];                /* running max updated_at, seeded from state */
     char etag[HTTP_ETAG_MAX];       /* page-1 ETag; "" when absent */
@@ -387,6 +397,12 @@ void gh_commit_watermarks(state_t *st)
 
     n = st->n_repos < STATE_REPO_MAX ? st->n_repos : STATE_REPO_MAX;
     for (i = 0; i < n; i++) {
+        if (g_stage_bf_valid[i]) {
+            st->repos[i].backfill_page  = g_stage_bf[i];
+            st->repos[i].backfill_round = g_stage_bf_round[i];
+            st->repos[i].dirty = 1;
+            g_stage_bf_valid[i] = 0;
+        }
         if (!g_stage_valid[i])
             continue;
         str_copy(st->repos[i].watermark, sizeof st->repos[i].watermark, g_stage_wm[i]);
@@ -394,6 +410,203 @@ void gh_commit_watermarks(state_t *st)
         st->repos[i].dirty = 1;
         g_stage_valid[i] = 0;       /* a commit consumes the staging */
     }
+}
+
+/*
+ * Picks the repo furthest behind on coverage: lexicographic minimum of
+ * (backfill_round, backfill_page). Returns its index, or n on no candidate.
+ *
+ * Round before page is what keeps the rotation fair -- see repo_state_t. Ties
+ * go to the lower index, which only matters on the very first cycle when every
+ * repo is at (0, 0).
+ */
+static size_t backfill_pick(const state_t *st, size_t n)
+{
+    size_t i, best = n;
+
+    for (i = 0; i < n; i++) {
+        const repo_state_t *r = &st->repos[i];
+        const repo_state_t *b;
+
+        if (best == n) {
+            best = i;
+            continue;
+        }
+        b = &st->repos[best];
+        if (r->backfill_round < b->backfill_round ||
+            (r->backfill_round == b->backfill_round &&
+             r->backfill_page < b->backfill_page))
+            best = i;
+    }
+    return best;
+}
+
+/*
+ * One rotation step of the rolling backfill: walks GH_BACKFILL_PAGES pages of
+ * one repo's open+unassigned backlog and appends what it parses to `out`.
+ *
+ * Ordered created-ascending, not updated-descending. The cursor is a page
+ * number, so the ordering underneath it has to be stable: sorted by update time
+ * the pages reshuffle whenever anyone comments on anything, and a cursor of 7
+ * would mean a different slice every cycle -- issues would be skipped and
+ * re-read at random. Creation order never changes.
+ *
+ * assignee=none is server-side, so the sweep never spends a page on issues
+ * gh_drop_assigned() would discard anyway. A short page means the backlog ran
+ * out: the round increments and the cursor wraps to 1, which is what makes
+ * coverage repeat rather than stop.
+ *
+ * Returns the number of issues appended. Any failure returns what it already
+ * has and leaves the cursor unstaged, so the same pages are re-walked next
+ * cycle -- re-reading a page is free, skipping one hides an issue for a whole
+ * rotation.
+ */
+static size_t gh_backfill_sweep(arena_t *a, state_t *st, const char *auth,
+                                issue_t *out, size_t cap)
+{
+    const char **hdrs;
+    http_req_t *reqs;
+    http_resp_t *resps;
+    repo_state_t *rs;
+    size_t n_repos, idx, n_req = 0, appended = 0, i, h;
+    int first_page, short_page = 0, failed = 0;
+
+    if (a == NULL || st == NULL || st->repos == NULL || out == NULL || cap == 0)
+        return 0;
+
+    n_repos = st->n_repos < STATE_REPO_MAX ? st->n_repos : STATE_REPO_MAX;
+    idx = backfill_pick(st, n_repos);
+    if (idx >= n_repos)
+        return 0;
+
+    rs = &st->repos[idx];
+    first_page = rs->backfill_page > 0 ? rs->backfill_page : 1;
+
+    hdrs  = arena_calloc(a, GH_N_BASE_HDRS + 2, sizeof *hdrs);
+    reqs  = arena_calloc(a, GH_BACKFILL_PAGES, sizeof *reqs);
+    resps = arena_calloc(a, GH_BACKFILL_PAGES, sizeof *resps);
+    if (hdrs == NULL || reqs == NULL || resps == NULL) {
+        LOGW("backfill: arena exhausted setting up the sweep of %s", rs->repo);
+        return 0;
+    }
+
+    hdrs[0] = auth;
+    for (h = 0; h < GH_N_BASE_HDRS; h++)
+        hdrs[h + 1] = gh_base_hdrs[h];
+    hdrs[GH_N_BASE_HDRS + 1] = NULL;
+
+    for (i = 0; i < (size_t)GH_BACKFILL_PAGES; i++) {
+        char *url = arena_printf(a,
+            "%s/repos/%s/issues?state=open&assignee=none&sort=created"
+            "&direction=asc&per_page=%d&page=%d",
+            GH_API_BASE, rs->repo, GH_PER_PAGE, first_page + (int)i);
+
+        if (url == NULL) {
+            LOGW("backfill: arena exhausted building the %s page URLs", rs->repo);
+            break;
+        }
+        reqs[n_req].url         = url;
+        reqs[n_req].method      = "GET";
+        reqs[n_req].headers     = hdrs;
+        reqs[n_req].timeout_sec = GH_HTTP_TIMEOUT_SEC;
+        n_req++;
+    }
+    if (n_req == 0)
+        return 0;
+
+    if (http_perform_batch(a, reqs, n_req, resps, (int)n_req) < 0) {
+        LOGW("backfill: sweep of %s failed to run; cursor unchanged", rs->repo);
+        return 0;
+    }
+
+    /*
+     * In page order, so a short page is recognised as the end of the backlog
+     * rather than as a hole. A failure stops the walk: pages after it cannot be
+     * trusted to have been seen, and the cursor must not move past them.
+     */
+    for (i = 0; i < n_req; i++) {
+        http_resp_t *r = &resps[i];
+        char newest[32] = "";
+        int parsed;
+
+        if (r->status != 200) {
+            if (r->status == 0)
+                LOGW("backfill: %s page %d transport failure", rs->repo,
+                     first_page + (int)i);
+            else
+                LOGW("backfill: %s page %d replied %ld", rs->repo,
+                     first_page + (int)i, r->status);
+            failed = 1;
+            break;
+        }
+        if (r->rl_remaining >= 0 && r->rl_remaining < RL_RESERVE) {
+            LOGW("backfill: rate-limit reserve reached (%ld left), stopping the sweep",
+                 r->rl_remaining);
+            failed = 1;
+            break;
+        }
+
+        parsed = gh_parse_issues(a, r->body != NULL ? r->body : "",
+                                 r->body != NULL ? r->body_len : 0, rs->repo,
+                                 out + appended, cap - appended,
+                                 newest, sizeof newest);
+        if (parsed < 0) {
+            LOGW("backfill: %s page %d unparseable (%d)", rs->repo,
+                 first_page + (int)i, parsed);
+            failed = 1;
+            break;
+        }
+
+        appended += (size_t)parsed;
+        if (appended >= cap) {
+            LOGW("backfill: buffer full during the %s sweep; cursor unchanged",
+                 rs->repo);
+            failed = 1;
+            break;
+        }
+
+        /*
+         * End of the backlog is the absence of a `next` link, not a short
+         * `parsed`. PRs are filtered out during parsing, so a perfectly full
+         * page of 100 can parse to 40 issues -- treating that as the end would
+         * wrap the cursor early and leave most of the backlog unvisited, which
+         * is the exact bug this function exists to fix.
+         */
+        {
+            char next_url[GH_URL_MAX];
+
+            if (r->link[0] == '\0' ||
+                http_link_next(r->link, next_url, sizeof next_url) != 1) {
+                short_page = 1;
+                break;
+            }
+        }
+    }
+
+    if (failed && appended == 0)
+        return 0;
+
+    /*
+     * Staged, never written here: the cursor commits with the watermarks after
+     * notification and publication have succeeded (rule 4). A failure part-way
+     * leaves it alone entirely, so the sweep repeats rather than skips.
+     */
+    if (!failed && idx < STATE_REPO_MAX) {
+        if (short_page) {
+            g_stage_bf[idx]       = 1;
+            g_stage_bf_round[idx] = rs->backfill_round + 1;
+            LOGI("backfill: %s backlog complete (round %d), wrapping",
+                 rs->repo, g_stage_bf_round[idx]);
+        } else {
+            g_stage_bf[idx]       = first_page + (int)n_req;
+            g_stage_bf_round[idx] = rs->backfill_round;
+        }
+        g_stage_bf_valid[idx] = 1;
+    }
+
+    LOGI("backfill: %s pages %d-%d, %zu issue(s)", rs->repo, first_page,
+         first_page + (int)n_req - 1, appended);
+    return appended;
 }
 
 /* Maps repos[i] onto its state_t slot, preferring the identity mapping. */
@@ -418,7 +631,7 @@ int gh_fetch_all(arena_t *a, state_t *st, const char *const *repos, size_t n_rep
     http_req_t *reqs = NULL;
     http_resp_t *resps = NULL;
     issue_t *issues = NULL;
-    size_t cap, n_issues = 0, n_ctx = 0, n_req = 0, i, h;
+    size_t cap, room, n_issues = 0, n_ctx = 0, n_req = 0, i, h;
     long rl_low = -1;
     int page, rc = 0, fatal = 0, stop = 0;
 
@@ -435,6 +648,7 @@ int gh_fetch_all(arena_t *a, state_t *st, const char *const *repos, size_t n_rep
      * committed on the back of a later cycle.
      */
     memset(g_stage_valid, 0, sizeof g_stage_valid);
+    memset(g_stage_bf_valid, 0, sizeof g_stage_bf_valid);
 
     /* Secrets come from the environment only, and never reach a log line. */
     token = env_or_null("GH_TOKEN");
@@ -448,8 +662,14 @@ int gh_fetch_all(arena_t *a, state_t *st, const char *const *repos, size_t n_rep
     if (n_repos == 0)
         return 0;
 
-    /* One full page per repo. Pagination beyond that is bounded by this cap. */
-    cap = n_repos * (size_t)GH_PER_PAGE;
+    /*
+     * A whole-cycle ceiling, no longer n_repos * GH_PER_PAGE. That old shape
+     * made the buffer one shared pot, so tt-metal and pytorch drained it every
+     * cycle and whatever was parsed after them got nothing -- which is how an
+     * unassigned tinygrad bounty stayed invisible. GH_REPO_MAX_ISSUES below is
+     * the per-repo share that stops that; this is only the arena guard.
+     */
+    cap = (size_t)GH_MAX_ISSUES_PER_CYCLE;
     issues = arena_calloc(a, cap, sizeof *issues);
     ctx = arena_calloc(a, n_repos, sizeof *ctx);
     reqs = arena_calloc(a, n_repos, sizeof *reqs);
@@ -620,9 +840,24 @@ int gh_fetch_all(arena_t *a, state_t *st, const char *const *repos, size_t n_rep
                 c->have_etag = 1;
             }
 
+            /*
+             * Room is the smaller of what the cycle has left and what this repo
+             * has left of its own share. The per-repo half is the fairness rule:
+             * without it one busy repo spends the whole buffer.
+             */
+            room = cap - n_issues;
+            if (c->n_kept < (size_t)GH_REPO_MAX_ISSUES) {
+                size_t repo_room = (size_t)GH_REPO_MAX_ISSUES - c->n_kept;
+
+                if (repo_room < room)
+                    room = repo_room;
+            } else {
+                room = 0;
+            }
+
             parsed = gh_parse_issues(a, r->body != NULL ? r->body : "",
                                      r->body != NULL ? r->body_len : 0, c->repo,
-                                     issues + n_issues, cap - n_issues,
+                                     issues + n_issues, room,
                                      newest, sizeof newest);
             if (parsed < 0) {
                 LOGW("%s: unparseable issues payload (%d) -- skipping, state "
@@ -632,18 +867,20 @@ int gh_fetch_all(arena_t *a, state_t *st, const char *const *repos, size_t n_rep
             }
 
             n_issues += (size_t)parsed;
+            c->n_kept += (size_t)parsed;
             c->fetched = 1;
             if (newest[0] != '\0' && strcmp(newest, c->newest) > 0)
                 str_copy(c->newest, sizeof c->newest, newest);
 
-            if (n_issues == cap) {
+            if (n_issues == cap || c->n_kept >= (size_t)GH_REPO_MAX_ISSUES) {
                 /*
                  * We dropped issues we could not store. Refusing to stage the
                  * watermark makes the next cycle re-see them (rule 4) instead
                  * of skipping them for good.
                  */
-                LOGW("%s: issue buffer full at %zu; not advancing the watermark "
-                     "so the remainder is re-processed next cycle", c->repo, cap);
+                LOGW("%s: hit the %s cap (%zu kept); not advancing the watermark "
+                     "so the remainder is re-processed next cycle", c->repo,
+                     n_issues == cap ? "cycle" : "per-repo", c->n_kept);
                 c->no_stage = 1;
                 continue;
             }
@@ -719,6 +956,15 @@ done:
             g_stage_valid[c->idx] = 1;
         }
     }
+
+    /*
+     * The rolling sweep runs last, on whatever the delta fetch left. It is
+     * deliberately not gated on the delta succeeding: a repo whose delta failed
+     * is exactly one whose backlog is worth walking, and the two advance
+     * independent cursors.
+     */
+    if (n_issues < cap)
+        n_issues += gh_backfill_sweep(a, st, auth, issues + n_issues, cap - n_issues);
 
     *out = issues;
     *n_out = n_issues;

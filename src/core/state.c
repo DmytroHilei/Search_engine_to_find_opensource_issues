@@ -122,7 +122,8 @@ static void load_etags(state_t *st)
     }
 
     while (fgets(line, sizeof line, f) != NULL) {
-        char *tab1, *tab2, *etag, *watermark;
+        char *tab1, *tab2, *tab3, *tab4, *etag, *watermark;
+        char *backfill = NULL, *round = NULL;
         repo_state_t *rs;
         size_t len;
         time_t ignored;
@@ -160,6 +161,23 @@ static void load_etags(state_t *st)
         etag = tab1 + 1;
         watermark = tab2 + 1;
 
+        /*
+         * Optional fourth field, the backfill cursor. Absent in every file
+         * written before the backfill existed, so its absence must read as
+         * "not started" rather than as a malformed line -- otherwise upgrading
+         * silently discards every watermark and re-fetches the world.
+         */
+        tab3 = strchr(watermark, '\t');
+        if (tab3 != NULL) {
+            *tab3 = '\0';
+            backfill = tab3 + 1;
+            tab4 = strchr(backfill, '\t');
+            if (tab4 != NULL) {
+                *tab4 = '\0';
+                round = tab4 + 1;
+            }
+        }
+
         if (line[0] == '\0' || strlen(line) >= STATE_REPO_MAX ||
             strlen(etag) >= HTTP_ETAG_MAX || strlen(watermark) >= 32) {
             LOGW("state: etags line %lu has an oversized field, skipped", lineno);
@@ -177,6 +195,25 @@ static void load_etags(state_t *st)
         /* Lengths are bounded above, so these cannot truncate. */
         snprintf(rs->etag, sizeof rs->etag, "%s", etag);
         snprintf(rs->watermark, sizeof rs->watermark, "%s", watermark);
+        /*
+         * A junk cursor reads as 0, not as a skipped line: losing the coverage
+         * position costs one repeated sweep, while dropping the line would lose
+         * the watermark and re-fetch a week of issues.
+         */
+        rs->backfill_page = 0;
+        rs->backfill_round = 0;
+        if (backfill != NULL) {
+            long v = strtol(backfill, NULL, 10);
+
+            if (v > 0 && v <= GH_BACKFILL_MAX_PAGE)
+                rs->backfill_page = (int)v;
+        }
+        if (round != NULL) {
+            long v = strtol(round, NULL, 10);
+
+            if (v > 0 && v <= GH_BACKFILL_MAX_PAGE)
+                rs->backfill_round = (int)v;
+        }
         rs->dirty = 0;
     }
 
@@ -289,8 +326,9 @@ static int emit_etags(FILE *f, void *user)
     size_t i;
 
     for (i = 0; i < st->n_repos; i++) {
-        if (fprintf(f, "%s\t%s\t%s\n", st->repos[i].repo, st->repos[i].etag,
-                    st->repos[i].watermark) < 0)
+        if (fprintf(f, "%s\t%s\t%s\t%d\t%d\n", st->repos[i].repo, st->repos[i].etag,
+                    st->repos[i].watermark, st->repos[i].backfill_page,
+                    st->repos[i].backfill_round) < 0)
             return -EIO;
     }
     return 0;

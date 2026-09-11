@@ -19,6 +19,24 @@ typedef struct {
     char repo[STATE_REPO_MAX];
     char etag[HTTP_ETAG_MAX];
     char watermark[32];           /* RFC3339, "" when never fetched */
+    /*
+     * Next page of this repo's open+unassigned backlog for the rolling backfill
+     * to walk, 1-based. 0 means "not started". It only resets to 1 when a sweep
+     * runs off the end of the backlog, which is what makes the coverage
+     * eventually repeat rather than stop.
+     *
+     * Separate from `watermark` on purpose: the watermark tracks recency and
+     * only moves forward, while this tracks coverage and wraps.
+     */
+    int backfill_page;
+    /*
+     * Completed sweeps of this repo's backlog. Selection is (round, page)
+     * lexicographic, and this field is the half that keeps it fair: page alone
+     * would mean ROCm/composable_kernel, whose whole backlog is one page, wraps
+     * to 1 immediately and is then permanently the minimum -- swept every cycle
+     * while tt-metal sits at page 17 and is never chosen again.
+     */
+    int backfill_round;
     int dirty;
 } repo_state_t;
 

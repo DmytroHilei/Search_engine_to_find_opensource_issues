@@ -48,11 +48,18 @@
     X("tenstorrent/tt-metal")       \
     X("tenstorrent/tt-blacksmith")  \
     X("tinygrad/tinygrad")          \
+    X("exo-explore/exo")            \
     X("ggml-org/llama.cpp")         \
+    X("ggml-org/whisper.cpp")       \
     X("openssl/openssl")            \
     X("pytorch/pytorch")            \
     X("triton-lang/triton")         \
     X("NVIDIA/cutlass")             \
+    X("NVIDIA/cccl")                \
+    X("Dao-AILab/flash-attention")  \
+    X("vllm-project/vllm")          \
+    X("ROCm/composable_kernel")     \
+    X("apache/tvm")                 \
     X("opencv/opencv")
 
 /*
@@ -268,7 +275,51 @@ static const kw_t KEYWORDS[] = {
 #define GH_PER_PAGE            100
 #define GH_MAX_PAGES           10    /* hard stop; early-exit normally hits first */
 #define GH_HTTP_TIMEOUT_SEC    30
-#define GH_FIRST_RUN_LOOKBACK  (7 * 24 * 3600)  /* watermark for an unseen repo */
+/*
+ * Watermark for a repo never fetched before. This is a *delta* window, not a
+ * coverage guarantee: an issue last touched before it is invisible to the delta
+ * fetch forever after, because the watermark only ever moves forward. tinygrad
+ * #3039 -- an open, unassigned, labelled bounty -- was last updated 11 days ago
+ * and so was never once fetched. The backfill below is what covers that gap;
+ * do not try to fix it by enlarging this, which only moves the cliff.
+ */
+#define GH_FIRST_RUN_LOOKBACK  (7 * 24 * 3600)
+/*
+ * Fairness cap for the delta fetch. Previously the whole cycle shared
+ * n_repos * GH_PER_PAGE slots, so two busy repos (tt-metal and pytorch, every
+ * time) consumed the budget and every repo parsed after them got nothing. The
+ * per-repo cap is what stops a noisy neighbour starving tinygrad.
+ */
+#define GH_REPO_MAX_ISSUES     200
+/* Whole-cycle ceiling, delta and backfill together. ~8.5 KB per issue against
+ * a 96 MB arena, so this is ~13 MB and leaves the judge its pools. */
+#define GH_MAX_ISSUES_PER_CYCLE 1500
+/*
+ * ---- rolling backfill ----
+ *
+ * The delta fetch answers "what changed since last cycle". It cannot answer
+ * "what is open and unclaimed right now", which is the actual question, and an
+ * issue that was already old when the daemon first ran is never in a delta.
+ *
+ * So one repo per cycle gets a few pages of its open+unassigned backlog walked
+ * oldest-first, with the page cursor persisted in the etag file. Around the
+ * rotation it goes, a few pages at a time, until every repo's backlog has been
+ * seen; then it wraps and re-sweeps, which is how a bounty unassigned last
+ * month still reaches the board. Cost is bounded and tiny: GH_BACKFILL_PAGES
+ * requests per cycle regardless of how far behind it is.
+ *
+ * assignee=none is applied server-side -- it roughly halves the pages to walk
+ * and matches gh_drop_assigned(), so the backfill never spends a request on an
+ * issue the intake filter would throw away anyway.
+ */
+#define GH_BACKFILL_PAGES      3     /* pages per cycle, for one repo */
+#define GH_BACKFILL_REPOS      1     /* repos swept per cycle */
+/*
+ * Sanity bound on a cursor read back from disk, not a depth limit: the sweep
+ * stops when GitHub returns a short page, long before this. It exists so a
+ * corrupted digit cannot send the fetch to page 2000000000.
+ */
+#define GH_BACKFILL_MAX_PAGE   100000
 /*
  * Cap on the issue body we retain. Bodies routinely carry 40 KB of stack trace,
  * and a full first-run page of 100 of them across 5 repos can exhaust the cycle

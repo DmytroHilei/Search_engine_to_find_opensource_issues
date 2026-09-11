@@ -304,6 +304,83 @@ static void test_flush_roundtrip(void)
     CHECK_EQ(state_close(&st), 0);
 }
 
+/*
+ * An etags file written before the backfill existed has three fields, not five.
+ * Those lines must keep their watermark and read as "sweep not started" -- if a
+ * missing cursor made the line malformed, upgrading would silently discard
+ * every watermark and re-fetch a week of issues across every repo.
+ */
+static void test_pre_backfill_etags_still_load(void)
+{
+    state_t st;
+    repo_state_t *rs;
+
+    sandbox_wipe();
+    write_etags("ggml-org/llama.cpp\tW/\"old\"\t2026-09-10T09:41:00Z\n"
+                "NVIDIA/cutlass\tW/\"four\"\t2026-09-09T00:00:00Z\t7\n"
+                "triton-lang/triton\tW/\"five\"\t2026-09-08T00:00:00Z\t4\t2\n");
+    CHECK_EQ(state_open(&st, TEST_REPOS, N_TEST_REPOS), 0);
+
+    /* Three fields: watermark intact, cursor defaulted. */
+    rs = state_repo(&st, "ggml-org/llama.cpp");
+    CHECK(rs != NULL);
+    if (rs != NULL) {
+        CHECK(strcmp(rs->watermark, "2026-09-10T09:41:00Z") == 0);
+        CHECK(strcmp(rs->etag, "W/\"old\"") == 0);
+        CHECK_EQ(rs->backfill_page, 0);
+        CHECK_EQ(rs->backfill_round, 0);
+    }
+
+    /* Four fields: cursor read, round defaulted. */
+    rs = state_repo(&st, "NVIDIA/cutlass");
+    CHECK(rs != NULL);
+    if (rs != NULL) {
+        CHECK_EQ(rs->backfill_page, 7);
+        CHECK_EQ(rs->backfill_round, 0);
+        CHECK(strcmp(rs->watermark, "2026-09-09T00:00:00Z") == 0);
+    }
+
+    /* Five fields: both read. */
+    rs = state_repo(&st, "triton-lang/triton");
+    CHECK(rs != NULL);
+    if (rs != NULL) {
+        CHECK_EQ(rs->backfill_page, 4);
+        CHECK_EQ(rs->backfill_round, 2);
+    }
+
+    state_close(&st);
+}
+
+/* The cursor must survive a write/read cycle, or coverage restarts every run. */
+static void test_backfill_cursor_roundtrip(void)
+{
+    state_t st;
+    repo_state_t *rs;
+
+    sandbox_wipe();
+    CHECK_EQ(state_open(&st, TEST_REPOS, N_TEST_REPOS), 0);
+
+    rs = state_repo(&st, "triton-lang/triton");
+    CHECK(rs != NULL);
+    if (rs != NULL) {
+        snprintf(rs->watermark, sizeof rs->watermark, "2026-09-10T09:41:00Z");
+        rs->backfill_page  = 19;
+        rs->backfill_round = 3;
+        rs->dirty = 1;
+    }
+    CHECK_EQ(state_flush(&st), 0);
+    state_close(&st);
+
+    CHECK_EQ(state_open(&st, TEST_REPOS, N_TEST_REPOS), 0);
+    rs = state_repo(&st, "triton-lang/triton");
+    CHECK(rs != NULL);
+    if (rs != NULL) {
+        CHECK_EQ(rs->backfill_page, 19);
+        CHECK_EQ(rs->backfill_round, 3);
+    }
+    state_close(&st);
+}
+
 static void test_garbage_lines_skipped(void)
 {
     state_t st;
@@ -397,6 +474,8 @@ int main(void)
     TEST_RUN(test_seen_collision_overwrites_oldest);
     TEST_RUN(test_flush_roundtrip);
     TEST_RUN(test_read_only_writes_no_etags);
+    TEST_RUN(test_pre_backfill_etags_still_load);
+    TEST_RUN(test_backfill_cursor_roundtrip);
     TEST_RUN(test_garbage_lines_skipped);
     TEST_RUN(test_bad_args);
 
