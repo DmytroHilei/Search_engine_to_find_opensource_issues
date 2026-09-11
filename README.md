@@ -86,6 +86,38 @@ Never in `config.h`. Read from the environment at startup:
 | `ANTHROPIC_API_KEY` | only for `JUDGE_API` / `JUDGE_HYBRID` |
 | `NTFY_TOKEN` | only for a self-hosted ntfy with auth |
 
+### Getting `GH_TOKEN`
+
+If the `gh` CLI is already logged in, borrow its token rather than minting a
+second one:
+
+```sh
+export GH_TOKEN="$(gh auth token)"
+```
+
+Check the scopes first — `gh auth status` prints them, and publishing the board
+needs `gist`:
+
+```sh
+gh auth status            # look for 'gist' in "Token scopes"
+gh auth refresh -s gist   # add it if missing
+```
+
+Put that same `export` line in `~/.bashrc` to get it in every new shell. It
+stores the *instruction to ask `gh`*, not the token itself, so the token stays
+in the system keyring and `gh auth refresh` is picked up with no edit.
+
+Without `gh`, create a **classic** token at
+<https://github.com/settings/tokens> with `public_repo` + `gist` and export it
+directly. A fine-grained PAT cannot write gists, so it works only with
+`GIST_ID` left unset.
+
+`export` matters: a bare `GH_TOKEN=...` is a shell variable and child processes
+never see it, so `./issuewatch` fails with "GH_TOKEN is not set" while `echo
+$GH_TOKEN` looks fine.
+
+systemd reads none of this — see the timer section for `~/.config/issuewatch/env`.
+
 ## Run
 
 ```sh
