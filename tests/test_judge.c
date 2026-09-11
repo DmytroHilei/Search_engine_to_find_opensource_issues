@@ -154,10 +154,18 @@ static void test_why_is_copied(void)
 }
 
 /*
- * The memory-safety test. i=99, i=-3 and i=2^31 against a heap array of exactly
- * two issues: under ASan any of those writes trips a redzone.
+ * The memory-safety test, and now also the contract test for ignoring "i".
+ *
+ * The fixture carries i=99, i=-3 and i=2^31 against a heap array of exactly two
+ * issues: under ASan any write driven by those trips a redzone. Verdicts land
+ * by array position instead, which is bounded by `n` by construction, so a
+ * hostile "i" is not merely rejected -- it is never consulted.
+ *
+ * The first two elements therefore apply to issues 0 and 1 in order, and the
+ * two beyond the batch size are dropped. Before this, a model that shifted its
+ * own indices silently attached each verdict to the wrong issue.
  */
-static void test_parse_index_out_of_range(void)
+static void test_parse_ignores_model_index(void)
 {
     issue_t *is = calloc(2, sizeof *is);
     char *json;
@@ -172,10 +180,15 @@ static void test_parse_index_out_of_range(void)
     json = fixture_read("tests/fixtures/verdicts_bad.json", &len);
     r = judge_parse_verdicts(&g_arena, json, len, is, 2);
 
-    CHECK_EQ(r, 1);                     /* only the i=0 verdict is in range */
-    CHECK_EQ(is[0].llm_score, 7);
-    CHECK_EQ(is[1].llm_score, -1);      /* untouched */
-    CHECK(is[1].why == NULL);
+    /* Two positions exist, so two verdicts land and the tail is ignored. */
+    CHECK_EQ(r, 2);
+    CHECK_EQ(is[0].llm_score, 9);       /* element 0, whatever its "i" claimed */
+    CHECK_EQ(is[1].llm_score, 9);       /* element 1 */
+    CHECK(is[0].why != NULL);
+    CHECK(is[1].why != NULL);
+    /* Position 0 took the FIRST element, not the one claiming i=0. */
+    if (is[0].why != NULL)
+        CHECK(strstr(is[0].why, "past the end") != NULL);
 
     free(json);
     free(is);
@@ -422,7 +435,7 @@ int main(void)
 #endif
     TEST_RUN(test_parse_ok);
     TEST_RUN(test_why_is_copied);
-    TEST_RUN(test_parse_index_out_of_range);
+    TEST_RUN(test_parse_ignores_model_index);
     TEST_RUN(test_parse_malformed);
     TEST_RUN(test_truncate_short);
     TEST_RUN(test_truncate_long);

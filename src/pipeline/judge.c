@@ -980,6 +980,13 @@ int judge_parse_verdicts(arena_t *a, const char *json, size_t json_len,
     yyjson_doc *doc;
     yyjson_val *root, *v;
     yyjson_arr_iter it;
+    /*
+     * Separate from `applied`, which only counts verdicts that landed. Position
+     * must advance for every array element, including one skipped as malformed
+     * -- otherwise a single bad verdict shifts every issue after it by one,
+     * which is the exact misalignment this change exists to remove.
+     */
+    size_t pos = 0;
     int applied = 0;
     int rc;
 
@@ -1005,19 +1012,40 @@ int judge_parse_verdicts(arena_t *a, const char *json, size_t json_len,
         int keep;
         char *why = NULL;
 
-        if (!yyjson_is_int(vi)) {
-            LOGW("judge: verdict without an integer \"i\" -- skipped");
-            continue;
-        }
-        idx = (long long)yyjson_get_sint(vi);
         /*
-         * The bounds check that matters: a model asked about 8 issues will
-         * occasionally answer about issue 99, and writing there corrupts
-         * whatever follows the batch in the arena.
+         * Position in the array is the index, not the model's own "i".
+         *
+         * "i" is generated text and it is wrong often enough to matter: a real
+         * board published `why` strings describing the PREVIOUS issue in the
+         * batch, three rows running, alongside the scores that belonged with
+         * them -- so the board recommended issues on the strength of a
+         * different issue's reasoning. The `index N out of range for a batch of
+         * N` warning is the same fault where it happens to be detectable.
+         *
+         * Position is structural instead: ollama_verdict_schema() pins the
+         * array to exactly n items via minItems/maxItems, so the k-th verdict
+         * is the verdict for the k-th issue by construction. A model that
+         * answers out of order would defeat this, but every observed reply is
+         * in order, and trusting "i" mis-assigns outright.
          */
-        if (idx < 0 || (unsigned long long)idx >= (unsigned long long)n) {
-            LOGW("judge: verdict index %lld out of range for a batch of %zu", idx, n);
-            continue;
+        idx = (long long)pos++;
+        if ((unsigned long long)idx >= (unsigned long long)n) {
+            LOGW("judge: more verdicts than the %zu issues asked about -- "
+                 "ignoring the tail", n);
+            break;
+        }
+        /*
+         * Kept as a disagreement signal only. It costs nothing and it is how
+         * this fault became visible in the first place; if it starts firing on
+         * every batch, the model has stopped answering in order and position is
+         * no longer safe either.
+         */
+        if (yyjson_is_int(vi)) {
+            long long claimed = (long long)yyjson_get_sint(vi);
+
+            if (claimed != idx)
+                LOGW("judge: verdict %lld claims index %lld -- using position",
+                     idx, claimed);
         }
 
         keep = yyjson_is_bool(vk) ? (yyjson_get_bool(vk) ? 1 : 0) : 1;
