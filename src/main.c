@@ -49,16 +49,19 @@ static void install_signals(void)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s [--oneshot | --daemon] [--dry-run] [-v] [-q]\n"
+            "usage: %s [--oneshot | --daemon] [--runs N] [--dry-run] [-v] [-q]\n"
             "\n"
             "  --oneshot   run one poll cycle and exit (default)\n"
             "  --daemon    loop every POLL_INTERVAL_SEC; prefer a systemd timer\n"
+            "  --runs N    run N cycles %ds apart, then exit (1..%d). The backfill\n"
+            "              sweeps one repo per cycle, so this is how you cover\n"
+            "              every watched repo without waiting days for the timer.\n"
             "  --dry-run   print notifications to stdout, send nothing\n"
             "  -v          debug logging   -q  errors only\n"
             "\n"
             "environment: GH_TOKEN (required), ANTHROPIC_API_KEY (JUDGE_API,\n"
             "JUDGE_HYBRID), NTFY_TOKEN (optional, self-hosted ntfy auth)\n",
-            argv0);
+            argv0, RUNS_DELAY_SEC, RUNS_MAX);
 }
 
 /*
@@ -249,36 +252,53 @@ static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac
     return commit_cycle(st, dry_run);
 }
 
-/* Absolute-time sleep so the schedule cannot drift, interruptible by a signal. */
-static void sleep_until_next(void)
+/*
+ * Absolute-time sleep of `secs`, interruptible by a signal. Absolute rather
+ * than relative so a signal that interrupts it cannot extend the deadline --
+ * a relative sleep restarted after each EINTR drifts by however long the
+ * handler took, every time.
+ *
+ * Returns 0 if it slept the whole span, -1 if g_stop was set.
+ */
+static int sleep_seconds(long secs)
 {
     struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    ts.tv_sec += secs;
+
+    while (!g_stop) {
+        int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
+
+        if (rc == 0)
+            return 0;
+        if (rc == EINTR)
+            continue;   /* a signal; g_stop decides whether to bail */
+        LOGW("clock_nanosleep: %s", strerror(rc));
+        return 0;
+    }
+    return -1;
+}
+
+/* The daemon's inter-cycle sleep: the poll interval plus jitter, so every
+ * install does not hit the API on the same second. */
+static void sleep_until_next(void)
+{
     long jitter = 0;
 
     if (POLL_JITTER_SEC > 0)
         jitter = random() % (POLL_JITTER_SEC + 1);
 
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
-        return;
-    ts.tv_sec += POLL_INTERVAL_SEC + jitter;
-
     LOGI("sleeping %ld s", (long)POLL_INTERVAL_SEC + jitter);
-    while (!g_stop) {
-        int rc = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
-
-        if (rc == 0)
-            return;
-        if (rc == EINTR)
-            continue;   /* a signal; g_stop decides whether to bail */
-        LOGW("clock_nanosleep: %s", strerror(rc));
-        return;
-    }
+    (void)sleep_seconds(POLL_INTERVAL_SEC + jitter);
 }
 
 int main(int argc, char **argv)
 {
     run_mode_t mode = MODE_ONESHOT;
     int dry_run = 0;
+    long runs = 1, done = 0, failed = 0;
     int rc = EXIT_FAILURE, cycle_rc;
     arena_t perm = {0}, cycle = {0};
     state_t st = {0};
@@ -291,6 +311,20 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--oneshot") == 0)      mode = MODE_ONESHOT;
         else if (strcmp(argv[i], "--daemon") == 0)  mode = MODE_DAEMON;
         else if (strcmp(argv[i], "--dry-run") == 0) dry_run = 1;
+        else if (strcmp(argv[i], "--runs") == 0) {
+            char *end;
+
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--runs needs a count\n");
+                return EXIT_FAILURE;
+            }
+            errno = 0;
+            runs = strtol(argv[++i], &end, 10);
+            if (errno != 0 || *end != '\0' || runs < 1 || runs > RUNS_MAX) {
+                fprintf(stderr, "--runs wants 1..%d, got '%s'\n", RUNS_MAX, argv[i]);
+                return EXIT_FAILURE;
+            }
+        }
         else if (strcmp(argv[i], "-v") == 0)        log_set_level(LOG_DEBUG);
         else if (strcmp(argv[i], "-q") == 0)        log_set_level(LOG_ERR);
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -301,6 +335,13 @@ int main(int argc, char **argv)
             usage(argv[0]);
             return EXIT_FAILURE;
         }
+    }
+
+    /* An argv contradiction, so it fails here rather than after opening state
+     * and discovering GH_TOKEN is missing -- the wrong error for the mistake. */
+    if (mode == MODE_DAEMON && runs != 1) {
+        fprintf(stderr, "--runs and --daemon mean different things; pick one\n");
+        return EXIT_FAILURE;
     }
 
     install_signals();
@@ -371,8 +412,12 @@ int main(int argc, char **argv)
     }
     board_ready = 1;
 
-    LOGI("issuewatch starting: %zu repos, mode=%s%s", (size_t)N_REPOS,
-         mode == MODE_DAEMON ? "daemon" : "oneshot", dry_run ? ", dry-run" : "");
+    if (runs > 1)
+        LOGI("issuewatch starting: %zu repos, %ld runs %ds apart%s",
+             (size_t)N_REPOS, runs, RUNS_DELAY_SEC, dry_run ? ", dry-run" : "");
+    else
+        LOGI("issuewatch starting: %zu repos, mode=%s%s", (size_t)N_REPOS,
+             mode == MODE_DAEMON ? "daemon" : "oneshot", dry_run ? ", dry-run" : "");
 
     for (;;) {
         cycle_rc = run_cycle(&cycle, &st, &board, ac, dry_run);
@@ -383,8 +428,37 @@ int main(int argc, char **argv)
              cycle.peak, cycle.cap, cycle.failures);
 
         if (mode == MODE_ONESHOT) {
-            rc = (cycle_rc == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
-            break;
+            if (cycle_rc != 0)
+                failed++;
+            done++;
+            /*
+             * Report a failure if ANY cycle failed, not just the last. A burst
+             * is usually advancing the backfill rotation unattended, and
+             * exiting 0 because the final cycle happened to be clean would hide
+             * that a repo in the middle never got swept.
+             */
+            if (done >= runs || g_stop) {
+                if (runs > 1)
+                    LOGI("runs: %ld of %ld cycle(s) completed, %ld failed",
+                         done, runs, failed);
+                rc = (failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
+                break;
+            }
+            /*
+             * No arena_destroy/malloc_trim here, unlike the daemon path below:
+             * that exists to keep idle RSS at zero across a multi-hour sleep,
+             * and releasing 96 MB only to fault it straight back in ten seconds
+             * later is pure cost. The reset above is enough.
+             */
+            LOGI("runs: cycle %ld of %ld done, next in %ds", done, runs,
+                 RUNS_DELAY_SEC);
+            if (sleep_seconds(RUNS_DELAY_SEC) != 0) {
+                LOGI("runs: interrupted after %ld of %ld cycle(s), %ld failed",
+                     done, runs, failed);
+                rc = (failed == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
+                break;
+            }
+            continue;
         }
         if (g_stop) {
             rc = EXIT_SUCCESS;

@@ -27,6 +27,20 @@
 /* ---- scheduling ---- */
 #define POLL_INTERVAL_SEC      (3 * 3600)
 #define POLL_JITTER_SEC        600
+/*
+ * Gap between cycles under `--runs N`, which runs N cycles back to back and
+ * exits. That mode exists for the rolling backfill: one repo is swept per
+ * cycle, so covering all of WATCHED_REPOS takes dozens of cycles and waiting
+ * POLL_INTERVAL_SEC between them means days. `--runs 40` does it over lunch.
+ *
+ * Short, but deliberately not zero: each cycle re-reads ETags and re-checks the
+ * board, and hammering the API with no pause is what secondary rate limits are
+ * for. Ten seconds is far below POLL_INTERVAL_SEC and far above nothing.
+ */
+#define RUNS_DELAY_SEC         10
+/* Upper bound on --runs, so a typo'd `--runs 100000` is rejected at argv rather
+ * than spending the rate-limit budget discovering it. */
+#define RUNS_MAX               500
 
 /*
  * ---- repos to watch ----
