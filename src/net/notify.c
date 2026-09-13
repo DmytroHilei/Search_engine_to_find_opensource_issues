@@ -32,7 +32,16 @@ unsigned long notify_http_calls;
  * The board lives at one fixed URL for the life of the build, so the Click:
  * value is a literal -- no arena, and nothing to fail while building a header.
  */
-#define NOTIFY_BOARD_URL GIST_WEB_BASE "/" GIST_ID
+/*
+ * Both come from the user's config file now, so neither can be a macro that
+ * string-concatenates at compile time. Set once by notify_init() and read for
+ * the life of the process.
+ */
+static const char *g_topic = NTFY_TOPIC;
+static char g_board_url[256] = GIST_WEB_BASE "/" GIST_ID;
+/* The Click: header was a compile-time concatenation; it has to be a buffer
+ * now, and it must outlive the request since hdrs[] only borrows pointers. */
+static char g_click_hdr[sizeof g_board_url + 8] = "Click: " GIST_WEB_BASE "/" GIST_ID;
 
 /* Exposed (not in notify.h) so the sanitising tests can drive the real thing. */
 size_t notify_build_title(char *dst, size_t dstlen, const char *repo, const char *title);
@@ -40,7 +49,7 @@ size_t notify_build_summary_title(char *dst, size_t dstlen, const board_t *b, si
 
 static int notify_topic_is_placeholder(void)
 {
-    return strcmp(NTFY_TOPIC, "REPLACE_ME_WITH_RANDOM_HEX") == 0;
+    return strcmp(g_topic, "REPLACE_ME_WITH_RANDOM_HEX") == 0;
 }
 
 /*
@@ -217,7 +226,7 @@ static int notify_send(arena_t *a, const issue_t *is, int prio)
     body = (is->why != NULL && is->why[0] != '\0') ? is->why : title;
 
     memset(&req, 0, sizeof req);
-    req.url = arena_printf(a, "%s/%s", NTFY_SERVER, NTFY_TOPIC);
+    req.url = arena_printf(a, "%s/%s", NTFY_SERVER, g_topic);
     if (req.url == NULL) {
         LOGE("notify: arena exhausted building the ntfy URL");
         return -1;
@@ -243,18 +252,24 @@ static int notify_send(arena_t *a, const issue_t *is, int prio)
     return 0;
 }
 
-int notify_init(void)
+int notify_init(const char *topic, const char *gist_id)
 {
-    if (notify_topic_is_placeholder() || NTFY_TOPIC[0] == '\0') {
+    if (topic != NULL && topic[0] != '\0')
+        g_topic = topic;
+    if (gist_id != NULL && gist_id[0] != '\0')
+        snprintf(g_board_url, sizeof g_board_url, "%s/%s", GIST_WEB_BASE, gist_id);
+    snprintf(g_click_hdr, sizeof g_click_hdr, "Click: %s", g_board_url);
+
+    if (notify_topic_is_placeholder() || g_topic[0] == '\0') {
         /*
          * Hard failure, not a warning. A public ntfy.sh topic is world-readable
          * AND world-writable, so the shipped placeholder means anyone who reads
          * this repo can push to the user's phone. main() may choose to tolerate
          * this in --dry-run, where nothing is ever sent.
          */
-        LOGE("notify: NTFY_TOPIC is still the placeholder. ntfy.sh topics are "
-             "world-readable and world-writable -- set NTFY_TOPIC in src/config.h "
-             "to `openssl rand -hex 16` output and rebuild.");
+        LOGE("notify: no ntfy topic set. ntfy.sh topics are world-readable and "
+             "world-writable, so there is no safe default -- put "
+             "`ntfy-topic <openssl rand -hex 16>` in your config file.");
         return -1;
     }
     LOGI("notify: pushing to %s, at most %d per cycle", NTFY_SERVER, NOTIFY_MAX_PER_CYCLE);
@@ -366,7 +381,7 @@ int notify_summary(arena_t *a, const board_t *b, size_t n_new, int dry_run)
                "          %s\n"
                "          click: %s\n"
                "%s\n",
-               prio, title, NOTIFY_BOARD_URL, body);
+               prio, title, g_board_url, body);
         fflush(stdout);
         return 1;
     }
@@ -379,7 +394,7 @@ int notify_summary(arena_t *a, const board_t *b, size_t n_new, int dry_run)
     hdrs[nh++] = prio >= 5 ? "Tags: clipboard,rocket" : "Tags: clipboard";
     /* The point of the whole increment: the push is a doorbell, the board is
      * the room. Literal, so unlike notify_send()'s Click it cannot be dropped. */
-    hdrs[nh++] = "Click: " NOTIFY_BOARD_URL;
+    hdrs[nh++] = g_click_hdr;
     hdrs[nh++] = "Markdown: yes";
 
     tok = env_or_null("NTFY_TOKEN");
@@ -395,7 +410,7 @@ int notify_summary(arena_t *a, const board_t *b, size_t n_new, int dry_run)
     }
 
     memset(&req, 0, sizeof req);
-    req.url = arena_printf(a, "%s/%s", NTFY_SERVER, NTFY_TOPIC);
+    req.url = arena_printf(a, "%s/%s", NTFY_SERVER, g_topic);
     if (req.url == NULL) {
         LOGE("notify: arena exhausted building the ntfy URL");
         return -ENOMEM;

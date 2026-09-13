@@ -290,11 +290,35 @@ Things deliberately **not** done, because they'd be cargo cult at this scale:
 thread pools, io_uring, a custom allocator beyond the arena, SIMD keyword
 matching, an embedded database.
 
-## 11. `config.h` — the whole configuration surface
+## 11. Configuration — two surfaces, split by kind
 
-Read [src/config.h](src/config.h). It is the only file you edit, every macro in
-it carries the comment explaining what it is for, and several of the numbers
-there are tuned against measured payloads rather than guessed.
+The split is by whether a setting has a right answer.
+
+[src/config.h](src/config.h) holds the ones that do: batch size, context window,
+thresholds, timeouts, retention, resource caps. Compile-time macros, every one
+carrying the comment explaining what it is for, several tuned against measured
+payloads rather than guessed. No runtime override — a knob nobody re-measures is
+worse than no knob.
+
+The rest is per-person and has no right answer: which repos, the developer
+profile, the keyword table, and the two credentials. Those are read at startup
+from a text file — `$XDG_CONFIG_HOME/issuewatch/config`, or `--config PATH` —
+by [src/core/userconf.c](src/core/userconf.c). `config.h` still supplies the
+default for each key, so an absent or partial file runs fine, and
+[src/config.example](src/config.example) is a dump of exactly those defaults,
+checked field by field in `tests/test_userconf.c` so it cannot drift.
+
+Keywords are in the second group and not the first, which is the non-obvious
+call. They look like tuning, but the prefilter runs *before* the judge: an issue
+under `KW_SCORE_MIN` is dropped without ever being scored. A user who rewrites
+the profile and inherits a keyword table aimed at someone else's field gets an
+empty board and nothing in the log to explain it, so the two have to travel
+together.
+
+An unknown key in that file is a hard error rather than a warning. The failure
+it prevents is specific: `repos` instead of `repo` parses to "nothing happened",
+and the daemon then runs, reports success, and polls the author's repositories
+instead of the user's.
 
 This section used to embed a copy of that file. The copy went stale within two
 commits — it still showed `KW_SCORE_MIN 6` after the gate was retuned to 24

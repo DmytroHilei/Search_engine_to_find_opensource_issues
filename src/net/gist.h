@@ -14,10 +14,13 @@
  */
 
 /*
- * Fails when GIST_ID is still the placeholder, exactly like notify_init() on
- * NTFY_TOPIC. main() may tolerate that under --dry-run, where nothing is sent.
+ * `gist_id` comes from the user's config file; NULL or "" keeps config.h's
+ * GIST_ID. It must outlive the process -- the permanent arena does.
+ *
+ * Fails when no real id was set, exactly like notify_init() on the ntfy topic.
+ * main() may tolerate that under --dry-run, where nothing is sent.
  */
-int gist_init(void);
+int gist_init(const char *gist_id);
 
 /*
  * PATCHes GIST_FILENAME in GIST_ID with `markdown`. Returns 0 on success,

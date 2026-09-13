@@ -180,17 +180,24 @@ static void test_publish_rejects_empty_board(void)
 }
 
 /*
- * The shipped config.h carries the placeholder id, so gist_init() must refuse:
- * PATCHing it would 404 and read as a missing token scope. This is also why no
- * test here can reach the real publish path -- main() blocks a non-dry run at
- * init.
+ * No id means no publish: PATCHing the placeholder would 404 and read as a
+ * missing token scope. This is also why no test here can reach the real publish
+ * path -- main() blocks a non-dry run at init.
+ *
+ * NULL and "" fall back to config.h, which ships the placeholder, so all three
+ * of these are the same "unconfigured" case from the caller's side.
  */
-static void test_init_rejects_placeholder_id(void)
+static void test_init_rejects_an_unset_id(void)
 {
-    if (strcmp(GIST_ID, "REPLACE_ME_WITH_GIST_ID") == 0)
-        CHECK(gist_init() < 0);
-    else
-        CHECK_EQ(gist_init(), 0);
+    /* NULL and "" fall back to config.h, whose value differs per checkout, so
+     * the placeholder is the only form of "unset" a test can assert on. */
+    CHECK(gist_init("REPLACE_ME_WITH_GIST_ID") < 0);
+}
+
+/* A real id from the config file is accepted, and is what gets published to. */
+static void test_init_accepts_a_configured_id(void)
+{
+    CHECK_EQ(gist_init("0123456789abcdef0123"), 0);
 }
 
 int main(void)
@@ -205,7 +212,8 @@ int main(void)
     TEST_RUN(test_build_rejects_bad_args);
     TEST_RUN(test_dry_run_publishes_nothing);
     TEST_RUN(test_publish_rejects_empty_board);
-    TEST_RUN(test_init_rejects_placeholder_id);
+    TEST_RUN(test_init_rejects_an_unset_id);
+    TEST_RUN(test_init_accepts_a_configured_id);
 
     /* Belt and braces: nothing in this binary may have issued a request. */
     CHECK_EQ(gist_http_calls, 0);

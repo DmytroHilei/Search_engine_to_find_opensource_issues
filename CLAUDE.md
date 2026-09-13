@@ -15,22 +15,31 @@ published to a secret gist, with one summary push to ntfy per cycle. Runs every
 ## Non-negotiables
 
 - **C11.** No C++, no C++ headers, no `-std=gnu++`.
-- **All user configuration lives in `src/config.h`** as preprocessor macros.
-  There is no runtime config file, no CLI flags for tuning, no env-var
-  overrides for behaviour. Env vars are for *secrets only*.
-  `--model NAME` is the single exception, and it is deliberately narrow: it
-  overrides `OLLAMA_MODEL` only. Which model can run is bounded by the GPU in
-  the machine rather than by preference, and "does this fit my card" is a
-  question you answer by trying it, not by editing a header and rebuilding.
-  `OLLAMA_MODEL` remains the default and `OLLAMA_MODEL_SMALL` the tested
-  fallback. Do not grow this into a general flag surface -- a second tunable
-  reachable from argv is a design change, so ask first.
-  The one exception is `src/config.local.h`, which is untracked and holds
-  `NTFY_TOPIC` and `GIST_ID` — still compile-time macros, still no parsing.
-  `config.h` includes it if it exists and `#ifndef`-guards its own copies, so a
-  local value wins. This is not a second config file to extend: put a new
-  tunable in `config.h`, and put a value here only when publishing it would hand
-  someone a capability. See the next bullet for why those two qualify.
+- **Tuning lives in `src/config.h` as macros; the personal layer lives in a
+  config file.** The split is by kind, and it is the whole rule:
+
+  - `config.h` holds anything with a *right answer* — batch sizes, context
+    window, thresholds, timeouts, retention. These were tuned against a measured
+    corpus on specific hardware, and a knob nobody re-measures is worse than no
+    knob. No runtime override, no env var, no flag.
+  - `core/userconf.c` reads the settings that differ per person and have no
+    right answer: `repo`, `profile`, `keyword`/`label-keyword`, `ntfy-topic`,
+    `gist-id`. Default `$XDG_CONFIG_HOME/issuewatch/config`, or `--config PATH`.
+    `config.h` still holds the *defaults* for each, key by key, so an absent or
+    partial file still runs. `src/config.example` is the tracked template and is
+    verified against those defaults by `tests/test_userconf.c` — update it in
+    the same commit as any `WATCHED_REPOS`, `USER_PROFILE` or `KEYWORDS` edit.
+
+  Do not move a `config.h` tunable into the file because it would be convenient;
+  that is a design change, so ask. Adding a *setting* to the file means adding a
+  key to `apply_line()`, a default in `userconf_defaults()`, a line in
+  `config.example` and a test — an unknown key is a hard error, deliberately, so
+  a typo cannot silently leave the daemon watching the author's repositories.
+
+  `--model NAME` is the one argv tuning exception and stays narrow: it overrides
+  `OLLAMA_MODEL` only, because which model fits is bounded by the GPU in the
+  machine and "does this fit my card" is answered by trying it. Do not grow argv
+  into a general flag surface.
 - **Single-threaded.** Concurrency is `curl_multi` + `curl_multi_poll`. Do not
   add `pthread_create`. If you think you need a thread, you are solving the
   wrong problem.
@@ -45,7 +54,8 @@ published to a secret gist, with one summary push to ntfy per cycle. Runs every
   world-writable, so a real one in this public repo lets any reader push
   notifications to the user's phone. `GIST_ID` is milder — a secret gist is
   unlisted, not private — but still names a page that was not published
-  deliberately. Both live in `src/config.local.h`; `config.h` keeps only the
+  deliberately. Both come from the user's config file, which is untracked and
+  should be `chmod 600`; `config.h` and `src/config.example` keep only the
   `REPLACE_ME_*` placeholders, and `notify_init()` and `gist_init()` hard-fail
   on those rather than publishing to an address someone else can read.
 
@@ -73,6 +83,7 @@ src/
     util.c/h      logging, RFC3339, hashing, ASCII sanitising
     fileio.c/h    the atomic rewrite: temp file, fsync, rename, fsync dir
     state.c/h     mmap seen-set, etag/watermark file
+    userconf.c/h  the personal config file: repos, profile, keywords, secrets
     board.c/h     the ranked board: load, merge, rank, evict, board.tsv
   net/            everything that speaks HTTP
     http.c/h      curl_multi wrapper, gzip, HTTP/2 multiplex, rate-limit headers

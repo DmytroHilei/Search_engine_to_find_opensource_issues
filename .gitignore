@@ -12,6 +12,10 @@ build/
 env
 *.env
 
-# The real NTFY_TOPIC and GIST_ID. config.h carries placeholders and includes
-# this if it exists; config.local.h.example is the tracked template.
+# The personal config, if someone keeps it in the checkout rather than at
+# ~/.config/issuewatch/config. It holds the ntfy topic, which is a capability.
+# src/config.example is the tracked template and carries only placeholders.
 src/config.local.h
+/config
+/src/config
+/issuewatch.conf

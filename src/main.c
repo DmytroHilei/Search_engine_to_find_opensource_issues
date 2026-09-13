@@ -1,5 +1,3 @@
-#define CONFIG_WANT_REPOS
-
 #include <errno.h>
 #include <malloc.h>
 #include <signal.h>
@@ -20,11 +18,21 @@
 #include "pipeline/prefilter.h"
 #include "pipeline/render.h"
 #include "core/state.h"
+#include "core/userconf.h"
 #include "core/util.h"
 
 typedef enum { MODE_ONESHOT, MODE_DAEMON } run_mode_t;
 
 static volatile sig_atomic_t g_stop;
+
+/*
+ * The watched list, resolved from the config file at startup and then read-only
+ * for the life of the process. File scope rather than a run_cycle() parameter
+ * because it is fixed for the whole run: threading it through five call frames
+ * would suggest it can differ between cycles, and it cannot.
+ */
+static const char *const *g_repos;
+static size_t g_n_repos;
 
 static void on_signal(int sig)
 {
@@ -50,13 +58,15 @@ static void usage(const char *argv0)
 {
     fprintf(stderr,
             "usage: %s [--oneshot | --daemon] [--runs N] [--model NAME]\n"
-            "                  [--dry-run] [-v] [-q]\n"
+            "                  [--config PATH] [--dry-run] [-v] [-q]\n"
             "\n"
             "  --oneshot   run one poll cycle and exit (default)\n"
             "  --daemon    loop every POLL_INTERVAL_SEC; prefer a systemd timer\n"
             "  --runs N    run N cycles %ds apart, then exit (1..%d). The backfill\n"
             "              sweeps one repo per cycle, so this is how you cover\n"
             "              every watched repo without waiting days for the timer.\n"
+            "  --config P  read repos, profile, keywords and credentials from P\n"
+            "              (default %s). Everything else lives in src/config.h.\n"
             "  --dry-run   print notifications to stdout, send nothing\n"
             "  --model N   Ollama model to judge with (default %s).\n"
             "              %s needs ~7.2 GB of VRAM; on a smaller card try\n"
@@ -65,7 +75,7 @@ static void usage(const char *argv0)
             "\n"
             "environment: GH_TOKEN (required), ANTHROPIC_API_KEY (JUDGE_API,\n"
             "JUDGE_HYBRID), NTFY_TOKEN (optional, self-hosted ntfy auth)\n",
-            argv0, RUNS_DELAY_SEC, RUNS_MAX,
+            argv0, RUNS_DELAY_SEC, RUNS_MAX, "$XDG_CONFIG_HOME/issuewatch/config",
             OLLAMA_MODEL, OLLAMA_MODEL, OLLAMA_MODEL_SMALL);
 }
 
@@ -138,7 +148,7 @@ static int run_cycle(arena_t *cycle, state_t *st, board_t *board, const ac_t *ac
     }
 
     t_phase = time(NULL);
-    if (gh_fetch_all(cycle, st, REPOS, N_REPOS, &issues, &n) != 0) {
+    if (gh_fetch_all(cycle, st, g_repos, g_n_repos, &issues, &n) != 0) {
         LOGE("fetch failed, abandoning cycle");
         return -1;
     }
@@ -305,6 +315,8 @@ int main(int argc, char **argv)
     int dry_run = 0;
     long runs = 1, done = 0, failed = 0;
     const char *model = NULL;
+    const char *conf_path = NULL;
+    userconf_t cfg;
     int rc = EXIT_FAILURE, cycle_rc;
     arena_t perm = {0}, cycle = {0};
     state_t st = {0};
@@ -323,6 +335,13 @@ int main(int argc, char **argv)
                 return EXIT_FAILURE;
             }
             model = argv[++i];          /* argv outlives the process */
+        }
+        else if (strcmp(argv[i], "--config") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--config needs a path\n");
+                return EXIT_FAILURE;
+            }
+            conf_path = argv[++i];
         }
         else if (strcmp(argv[i], "--runs") == 0) {
             char *end;
@@ -372,8 +391,24 @@ int main(int argc, char **argv)
         goto out;
     }
 
-    /* Before judge_init(), which logs the model it will actually use. */
+    /*
+     * Before every init below: the config supplies the repo list, the profile
+     * spliced into the prompts, the keyword table and both credentials, so
+     * nothing that consumes them may run first. A file that exists but does not
+     * parse stops the process -- the alternative is silently polling the
+     * author's repositories instead of the user's.
+     */
+    if (userconf_load(&perm, conf_path, &cfg) != 0) {
+        LOGE("config unusable; fix it or delete it to fall back to the built-in");
+        goto out;
+    }
+
+    g_repos = cfg.repos;
+    g_n_repos = cfg.n_repos;
+
+    /* Before judge_init(), which assembles the prompts and logs the model. */
     judge_set_model(model);
+    judge_set_profile(cfg.profile);
     if (judge_init() != 0) {
         LOGE("judge backend unavailable");
         goto out;
@@ -381,9 +416,9 @@ int main(int argc, char **argv)
 
     /* A default ntfy topic is world-writable: anyone who guesses it can push to
      * the user's phone. Fatal for a real run, tolerable when only printing. */
-    if (notify_init() != 0) {
+    if (notify_init(cfg.ntfy_topic, cfg.gist_id) != 0) {
         if (!dry_run) {
-            LOGE("notify backend unusable; set NTFY_TOPIC in config.h");
+            LOGE("notify backend unusable; set ntfy-topic in your config file");
             goto out;
         }
         LOGW("notify backend unusable, continuing because --dry-run");
@@ -391,9 +426,9 @@ int main(int argc, char **argv)
 
     /* Same posture as notify_init(): a placeholder GIST_ID is fatal for a real
      * run, because the board is the output, but --dry-run only prints it. */
-    if (gist_init() != 0) {
+    if (gist_init(cfg.gist_id) != 0) {
         if (!dry_run) {
-            LOGE("board publishing unusable; set GIST_ID in config.h");
+            LOGE("board publishing unusable; set gist-id in your config file");
             goto out;
         }
         LOGW("board publishing unusable, continuing because --dry-run");
@@ -405,12 +440,12 @@ int main(int argc, char **argv)
     }
     http_ready = 1;
 
-    if (prefilter_init(&perm, &ac) != 0) {
+    if (prefilter_init(&perm, cfg.keywords, cfg.n_keywords, &ac) != 0) {
         LOGE("prefilter_init failed (perm arena too small?)");
         goto out;
     }
 
-    if (state_open(&st, REPOS, N_REPOS) != 0) {
+    if (state_open(&st, cfg.repos, cfg.n_repos) != 0) {
         LOGE("state_open failed");
         goto out;
     }
@@ -429,9 +464,9 @@ int main(int argc, char **argv)
 
     if (runs > 1)
         LOGI("issuewatch starting: %zu repos, %ld runs %ds apart%s",
-             (size_t)N_REPOS, runs, RUNS_DELAY_SEC, dry_run ? ", dry-run" : "");
+             cfg.n_repos, runs, RUNS_DELAY_SEC, dry_run ? ", dry-run" : "");
     else
-        LOGI("issuewatch starting: %zu repos, mode=%s%s", (size_t)N_REPOS,
+        LOGI("issuewatch starting: %zu repos, mode=%s%s", cfg.n_repos,
              mode == MODE_DAEMON ? "daemon" : "oneshot", dry_run ? ", dry-run" : "");
 
     for (;;) {

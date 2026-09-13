@@ -2,27 +2,23 @@
 #define CONFIG_H
 
 /*
- * The only file a user edits. Everything here is a compile-time constant.
- * Secrets never live here -- see GH_TOKEN / ANTHROPIC_API_KEY / NTFY_TOKEN,
- * which are read from the environment at startup.
+ * Tuning, and the DEFAULTS for everything personal. Compile-time constants, all
+ * of them: these are tuned against a measured corpus and a specific GPU, and a
+ * number nobody re-measures is worse than no knob at all.
  *
- * Two values sit awkwardly between those categories: NTFY_TOPIC and GIST_ID are
- * configuration by shape and credentials by consequence. An ntfy.sh topic name
- * IS the authentication -- anyone who reads it can push to the phone -- and this
- * repo is public, so committing a real one hands that out. They stay macros, but
- * the real values go in src/config.local.h, which is untracked. That file is
- * included first if it exists, and every definition below is a fallback for what
- * it did not set, so a local override always wins.
+ * What a user actually changes does not live here any more. The repo list, the
+ * developer profile, the keyword table and the two credentials are read at
+ * startup from a text file -- see src/config.example and core/userconf.h. The
+ * values below are what that file falls back to, key by key, so an absent or
+ * partial config still runs.
  *
- * A missing config.local.h is not an error: the placeholders below survive, and
+ * Secrets never live here. GH_TOKEN / ANTHROPIC_API_KEY / NTFY_TOKEN come from
+ * the environment; NTFY_TOPIC and GIST_ID come from the config file and keep
+ * only placeholders below. An ntfy.sh topic name IS the authentication --
+ * anyone who reads it can push to the phone -- and this repo is public, so
  * notify_init() and gist_init() both refuse to run on a placeholder rather than
  * publishing to an address someone else can read.
  */
-#if defined(__has_include)
-#  if __has_include("config.local.h")
-#    include "config.local.h"
-#  endif
-#endif
 
 /* ---- scheduling ---- */
 #define POLL_INTERVAL_SEC      (3 * 3600)
@@ -274,8 +270,8 @@ static const kw_t KEYWORDS[] = {
 
 /* ---- notifications ---- */
 #define NTFY_SERVER            "https://ntfy.sh"
-/* Credential, not a label. Set it in src/config.local.h; see the top of this
- * file. `openssl rand -hex 16`. */
+/* Credential, not a label. Set `ntfy-topic` in your config file; see the top of
+ * this one. `openssl rand -hex 16`. */
 #ifndef NTFY_TOPIC
 #define NTFY_TOPIC             "REPLACE_ME_WITH_RANDOM_HEX"
 #endif
@@ -302,8 +298,8 @@ static const kw_t KEYWORDS[] = {
  *     printf '# issuewatch\n' > /tmp/issuewatch-board.md
  *     gh gist create -d issuewatch /tmp/issuewatch-board.md
  *
- * GIST_ID is the hex id from the URL, not the whole URL. It goes in
- * src/config.local.h, not here: a secret gist is unlisted, not private, so the
+ * The id is the hex from that URL, not the whole URL, and it goes in your
+ * config file rather than here: a secret gist is unlisted, not private, so the
  * id is the only thing keeping the board off a public repo page.
  */
 #ifndef GIST_ID

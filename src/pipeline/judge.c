@@ -81,10 +81,15 @@ _Static_assert(LLM_WHY_MAX > 0, "LLM_WHY_MAX must be positive");
  *     keep=false went to 57 of 60. Making the flag more salient made the model
  *     reach for it.
  */
-#define JUDGE_SYSTEM_PROMPT                                                       \
+#define JUDGE_PROMPT_HEAD                                                         \
     "You triage GitHub issues for one developer. Answer only through the "        \
     "structured verdict list.\n"                                                  \
-    "Developer profile: " USER_PROFILE "\n"                                       \
+    "Developer profile: "
+
+/* The profile is spliced in between HEAD and TAIL at judge_init(), because it
+ * comes from the user's config file now and is not a literal to concatenate. */
+#define JUDGE_PROMPT_TAIL                                                         \
+    "\n"                                                                          \
     "Score 0-10 for how much this developer wants this issue on their phone now, "\
     "in two steps.\n"                                                             \
     "STEP 1. Read the `payment:` line of the issue. It was computed from the "    \
@@ -205,13 +210,59 @@ static int payload_shows_payment(const issue_t *is)
     return 0;
 }
 
-#define SCREEN_SYSTEM_PROMPT                                                      \
+#define SCREEN_PROMPT_HEAD                                                        \
     "You are a cheap first-pass filter over GitHub issues.\n"                     \
-    "Developer profile: " USER_PROFILE "\n"                                       \
+    "Developer profile: "
+
+#define SCREEN_PROMPT_TAIL                                                        \
+    "\n"                                                                          \
     "For each listed index answer keep=true only if this developer might "        \
     "plausibly care. Be generous: a second, stronger model scores the "           \
     "survivors. Reject only obvious noise -- bots, dependency bumps, typos, "     \
     "docs-only changes, other platforms."
+
+/*
+ * Assembled once at judge_init() and never freed: they live for the process,
+ * are read by every batch, and the cycle arena is reset under them. malloc is
+ * allowed here because this is startup, not the hot path.
+ */
+static char *g_judge_prompt;
+static char *g_screen_prompt;
+static const char *g_profile = USER_PROFILE;
+
+void judge_set_profile(const char *profile)
+{
+    if (profile != NULL && profile[0] != '\0')
+        g_profile = profile;
+}
+
+static char *prompt_join(const char *head, const char *profile, const char *tail)
+{
+    size_t n = strlen(head) + strlen(profile) + strlen(tail) + 1;
+    char *p = malloc(n);
+
+    if (p == NULL)
+        return NULL;
+    snprintf(p, n, "%s%s%s", head, profile, tail);
+    return p;
+}
+
+/*
+ * The profile competes with the issues for OLLAMA_NUM_CTX, and an overrun is
+ * silent: the model simply stops seeing the last issue in the batch. Warning at
+ * startup is the only place a user can connect the cause to the effect.
+ */
+static void warn_if_profile_crowds_the_context(void)
+{
+    size_t sys_bytes = strlen(g_judge_prompt);
+    size_t budget = (size_t)OLLAMA_NUM_CTX * 3;   /* ~3 bytes per token, English */
+
+    if (sys_bytes * 3 > budget)
+        LOGW("judge: the system prompt is %zu bytes, over a third of the ~%zu "
+             "byte budget at num_ctx %d. A long profile pushes issues out of "
+             "the window and the model stops seeing the end of each batch.",
+             sys_bytes, budget, OLLAMA_NUM_CTX);
+}
 
 /* ------------------------------------------------------------------ UTF-8 */
 
@@ -619,7 +670,7 @@ static int ollama_full_batch(arena_t *a, void *pool, issue_t *issues, size_t n,
     prompt = build_batch_prompt(a, issues, n, bodies);
     if (prompt == NULL)
         return -1;
-    if (ollama_post(a, pool, g_model, JUDGE_SYSTEM_PROMPT, prompt,
+    if (ollama_post(a, pool, g_model, g_judge_prompt, prompt,
                     ollama_verdict_schema, n, &resp) < 0)
         return -1;
     if (judge_extract_ollama_verdicts(a, resp.body, resp.body_len, &verdicts, &vlen) < 0)
@@ -713,7 +764,7 @@ static int ollama_screen(arena_t *a, void *pool, issue_t *issues, size_t n,
     prompt = build_batch_prompt(a, issues, n, bodies);
     if (prompt == NULL)
         return -1;
-    if (ollama_post(a, pool, OLLAMA_SCREEN_MODEL, SCREEN_SYSTEM_PROMPT, prompt,
+    if (ollama_post(a, pool, OLLAMA_SCREEN_MODEL, g_screen_prompt, prompt,
                     screen_schema, n, &resp) < 0)
         return -1;
     if (judge_extract_ollama_verdicts(a, resp.body, resp.body_len, &verdicts, &vlen) < 0)
@@ -834,7 +885,7 @@ static int anthropic_batch(arena_t *a, void *pool, issue_t *issues, size_t n,
 
     if (!yyjson_mut_obj_add_str(doc, root, "model", ANTHROPIC_MODEL) ||
         !yyjson_mut_obj_add_int(doc, root, "max_tokens", ANTHROPIC_MAX_TOKENS) ||
-        !yyjson_mut_obj_add_str(doc, root, "system", JUDGE_SYSTEM_PROMPT) ||
+        !yyjson_mut_obj_add_str(doc, root, "system", g_judge_prompt) ||
         !yyjson_mut_obj_add_val(doc, root, "tools", tools) ||
         !yyjson_mut_obj_add_val(doc, root, "tool_choice", choice) ||
         !yyjson_mut_obj_add_val(doc, root, "messages", msgs))
@@ -1326,6 +1377,16 @@ size_t judge_apply(issue_t *issues, size_t n)
 
 int judge_init(void)
 {
+    /* Before any backend check: a build that cannot assemble its own prompt has
+     * nothing to send, whichever backend it would have sent it to. */
+    g_judge_prompt = prompt_join(JUDGE_PROMPT_HEAD, g_profile, JUDGE_PROMPT_TAIL);
+    g_screen_prompt = prompt_join(SCREEN_PROMPT_HEAD, g_profile, SCREEN_PROMPT_TAIL);
+    if (g_judge_prompt == NULL || g_screen_prompt == NULL) {
+        LOGE("judge: out of memory assembling the system prompt");
+        return -1;
+    }
+    warn_if_profile_crowds_the_context();
+
 #if JUDGE_MODE == JUDGE_LOCAL
     /*
      * No reachability probe: Ollama unloads the model between cycles by design

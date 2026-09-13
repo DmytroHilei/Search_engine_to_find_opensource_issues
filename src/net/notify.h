@@ -13,7 +13,15 @@
  * constantly, and non-ASCII in a header silently truncates or 400s.
  */
 
-int notify_init(void);
+/*
+ * `topic` and `gist_id` come from the user's config file; NULL or "" keeps
+ * config.h's value. Both must outlive the process -- the permanent arena does.
+ * `gist_id` is here because the summary push carries a Click: link to the board.
+ *
+ * Fails when no real topic was set: an ntfy topic IS the authentication, so
+ * there is no safe default to fall back to.
+ */
+int notify_init(const char *topic, const char *gist_id);
 
 /*
  * Sends at most NOTIFY_MAX_PER_CYCLE issues, highest llm_score first, skipping

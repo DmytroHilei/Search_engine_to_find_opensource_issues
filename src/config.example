@@ -1,0 +1,135 @@
+# issuewatch -- personal configuration
+#
+# Copy to ~/.config/issuewatch/config and edit. Nothing here needs a rebuild;
+# everything else (batch size, context window, timeouts, score thresholds)
+# stays in src/config.h, where it is tuned against a measured corpus.
+#
+#     install -Dm600 src/config.example ~/.config/issuewatch/config
+#
+# chmod 600 matters: this file holds your ntfy topic, and on ntfy.sh the topic
+# name IS the authentication. Anyone who can read it can push to your phone.
+#
+# Syntax: one setting per line, "# " starts a comment, blank lines ignored.
+# An unknown setting is an error rather than a silent no-op -- a typo that did
+# nothing would leave you watching this list instead of yours.
+#
+# Any section you leave out keeps its built-in default. Any section you use
+# REPLACES the default entirely, so to drop one repo, list the others.
+
+
+# ---------------------------------------------------------------- credentials
+#
+# ntfy-topic: `openssl rand -hex 16`. Then subscribe to that exact name in the
+# ntfy app on your phone. Treat it like a password; there is no other auth.
+#
+# gist-id: create the gist once, seeded under the name the publish replaces:
+#     printf '# issuewatch\n' > /tmp/issuewatch-board.md
+#     gh gist create -d issuewatch /tmp/issuewatch-board.md
+# then take the hex id from the URL it prints. GH_TOKEN must be a classic
+# token with the `gist` scope; a fine-grained PAT cannot write gists.
+
+ntfy-topic  REPLACE_ME_WITH_RANDOM_HEX
+gist-id     REPLACE_ME_WITH_GIST_ID
+
+
+# ---------------------------------------------------------------------- repos
+#
+# One per line, owner/name. These are polled every cycle, and one of them is
+# additionally back-swept per cycle to reach issues older than the watermark.
+#
+# Deliberately absent: llvm/llvm-project. At ~39k open issues it would dominate
+# the backfill rotation for weeks and starve everything else.
+
+repo tenstorrent/tt-metal
+repo tenstorrent/tt-blacksmith
+repo tinygrad/tinygrad
+repo exo-explore/exo
+repo ggml-org/llama.cpp
+repo ggml-org/whisper.cpp
+repo openssl/openssl
+repo pytorch/pytorch
+repo triton-lang/triton
+repo NVIDIA/cutlass
+repo NVIDIA/cccl
+repo Dao-AILab/flash-attention
+repo vllm-project/vllm
+repo ROCm/composable_kernel
+repo apache/tvm
+repo opencv/opencv
+
+
+# -------------------------------------------------------------------- profile
+#
+# Spliced into the LLM system prompt as the developer description. One line
+# here is one line of the prompt, so the numbered structure is load-bearing:
+# the ranking is what stops the model collapsing "paid", "reputation" and
+# "interesting" into a single "is there money attached".
+#
+# Keep it short. It goes into EVERY request and competes with the issues
+# themselves for OLLAMA_NUM_CTX; the daemon warns at startup if it gets large
+# enough to push issues out of the context window.
+
+profile C/C++ and CUDA developer: HPC, GPU kernels, compilers, systems. Rank candidates by, in order of weight:
+profile (1) PAID. An explicit cash bounty, prize, grant or stipend, and nobody holding it yet -- a pull request only counts when you hold the assignment, so a claimed bounty is worth little. Outranks everything below it; the `payment:` line of each issue settles whether it applies.
+profile (2) REPUTATION. Unpaid work in a high-visibility project where landing a patch is durable credibility: kernel or compiler internals, a correctness fix with a regression test, a measurable performance win. Worth 6-8 with no money attached, but earn it on the three marks -- a high-visibility repository is not by itself a reason to score high.
+profile (3) INTEREST. Genuinely novel or difficult problems -- unusual hardware, emulators, numerical analysis, allocator and memory-model work -- that are worth doing for their own sake. Worth 6-7, same condition.
+profile Strong topical signals: numerical correctness (fp32/fp16 accuracy, overflow, NaN, rounding, INT_MIN edge cases), kernel and matmul optimisation, tensor cores, memory/allocator bugs, race conditions, undefined behaviour, Linux build and toolchain breakage.
+profile Ignore: docs and typos, translations, dependency bumps, Windows- or macOS-only problems, JS/Python packaging, support questions, and feature requests with no design attached. An issue that is merely a bug report with no route to a fix is not interesting either.
+
+# ------------------------------------------------------------------- keywords
+#
+# The prefilter, which runs BEFORE the LLM: an issue scoring under KW_SCORE_MIN
+# is dropped without ever being judged. That is why these travel with the
+# profile -- change one and you must change the other, or you will get an empty
+# board with nothing in the log to explain it.
+#
+#     keyword       <weight> <term...>    matched in title, body and labels
+#     label-keyword <weight> <term...>    matched in labels only
+#
+# The term is the rest of the line, so phrases need no quoting. Matching is
+# case-insensitive literal substring with no word boundaries, which is why
+# short tokens are avoided: "nan" would fire inside "maintenance".
+#
+# Weights may be negative, and that is not the same as a low weight: -10 pushes
+# a bot issue below the gate rather than merely failing to lift it above.
+# Label hits count KW_LABEL_MULTIPLIER times, capped at KW_COUNT_CAP per term.
+
+keyword 24 bounty
+keyword 24 gsoc
+keyword 24 stipend
+keyword 24 prize
+keyword 3 reward
+label-keyword 12 good first issue
+label-keyword 10 help wanted
+keyword 8 mentorship
+keyword 4 performance
+keyword 5 cuda
+keyword 3 kernel
+keyword 4 numerical
+keyword 4 precision
+keyword 4 overflow
+keyword 4 rounding
+keyword 4 fp32
+keyword 3 fp16
+keyword 4 tensor core
+keyword 4 matmul
+keyword 4 allocator
+keyword 3 emulator
+keyword 3 throughput
+keyword 3 optimization
+keyword 3 optimisation
+keyword 3 sanitizer
+keyword 4 use-after-free
+keyword 4 data race
+keyword 4 race condition
+keyword 4 memory leak
+keyword 4 segfault
+keyword 3 regression
+keyword 4 undefined behavior
+keyword -10 dependabot
+keyword -10 [bot]
+keyword -8 bump version
+keyword -6 typo
+keyword -6 translation
+keyword -5 changelog
+keyword -4 readme

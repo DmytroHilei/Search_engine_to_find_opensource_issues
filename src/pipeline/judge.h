@@ -34,6 +34,15 @@ int judge_init(void);
  */
 void judge_set_model(const char *name);
 
+/*
+ * Overrides the developer profile spliced into both system prompts. Pass NULL
+ * or "" to keep config.h's USER_PROFILE. Call before judge_init(), which is
+ * where the prompts are assembled; after that it has no effect.
+ *
+ * `profile` must outlive the process -- the permanent arena does.
+ */
+void judge_set_profile(const char *profile);
+
 int judge_batch(arena_t *a, issue_t *issues, size_t n);
 
 /*

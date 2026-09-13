@@ -292,17 +292,21 @@ static void test_dry_run_sends_nothing(void)
 }
 
 /*
- * The shipped config.h still carries the placeholder topic, so notify_init()
- * must refuse: a public ntfy.sh topic is world-writable, and a default one lets
- * anyone spam the user's phone. This is also why no test here can reach the real
- * send path -- main() blocks a non-dry-run at init.
+ * An ntfy.sh topic IS the authentication: world-readable and world-writable, so
+ * there is no safe default and notify_init() must refuse every form of "unset".
+ * This is also why no test here can reach the real send path -- main() blocks a
+ * non-dry-run at init.
  */
-static void test_init_rejects_placeholder_topic(void)
+static void test_init_rejects_an_unset_topic(void)
 {
-    if (strcmp(NTFY_TOPIC, "REPLACE_ME_WITH_RANDOM_HEX") == 0)
-        CHECK(notify_init() < 0);
-    else
-        CHECK_EQ(notify_init(), 0);
+    /* NULL and "" fall back to config.h, whose value differs per checkout, so
+     * the placeholder is the only form of "unset" a test can assert on. */
+    CHECK(notify_init("REPLACE_ME_WITH_RANDOM_HEX", NULL) < 0);
+}
+
+static void test_init_accepts_a_configured_topic(void)
+{
+    CHECK_EQ(notify_init("0123456789abcdef0123456789abcdef", "feedfacecafe"), 0);
 }
 
 /*
@@ -442,6 +446,11 @@ static void test_summary_click_opens_the_board(void)
     unsigned long before = notify_http_calls;
     int rc = -1;
 
+    /* Sets the board URL this asserts on. Explicit rather than inherited from
+     * whichever notify_init() ran last: the id is runtime state now, so a test
+     * that reads it must be the test that set it. */
+    CHECK_EQ(notify_init("0123456789abcdef0123456789abcdef", "feedfacecafe"), 0);
+
     fake_board(&b, slots, 3);
     out = capture_dry_run_summary(&g_arena, &b, 2, &rc);
     if (out == NULL) {
@@ -450,7 +459,7 @@ static void test_summary_click_opens_the_board(void)
     }
 
     CHECK_EQ(rc, 1);
-    CHECK(strstr(out, GIST_WEB_BASE "/" GIST_ID) != NULL);
+    CHECK(strstr(out, GIST_WEB_BASE "/feedfacecafe") != NULL);
     CHECK(strstr(out, "2 new, 3 open") != NULL);
     CHECK(strstr(out, "prio=5") != NULL);           /* llm_score 9 -> Priority 5 */
     CHECK(strstr(out, "bf16 matmul NaN on RDNA4") != NULL);
@@ -473,7 +482,8 @@ int main(void)
     TEST_RUN(test_cycle_cap);
     TEST_RUN(test_seen_is_skipped);
     TEST_RUN(test_dry_run_sends_nothing);
-    TEST_RUN(test_init_rejects_placeholder_topic);
+    TEST_RUN(test_init_rejects_an_unset_topic);
+    TEST_RUN(test_init_accepts_a_configured_topic);
     TEST_RUN(test_summary_dry_run_sends_nothing);
     TEST_RUN(test_summary_nothing_new_is_silent);
     TEST_RUN(test_summary_title_is_ascii_and_single_line);

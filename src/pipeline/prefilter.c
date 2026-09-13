@@ -1,19 +1,13 @@
 /*
- * Hand-written Aho-Corasick over the static KEYWORDS[] table. Built once into
- * the permanent arena; scoring allocates nothing at all.
+ * Hand-written Aho-Corasick over the keyword table prefilter_init() is handed --
+ * config.h's KEYWORDS[] unless the user's config file replaced it. Built once
+ * into the permanent arena; scoring allocates nothing at all.
  *
  * Why not a token hash map: half the useful terms are phrases ("good first
  * issue", "race condition"), and useful hits land mid-token ("cudaMemcpy"
  * contains "cuda"). A trie also makes pattern bytes literal for free, which is
  * what makes "[bot]" work without any escaping.
  */
-
-/*
- * Must precede config.h: KEYWORDS[]/N_KEYWORDS exist only behind this guard so
- * that they do not land an unused private copy in every translation unit. This
- * is the one file that wants them.
- */
-#define CONFIG_WANT_KEYWORDS
 
 #include "pipeline/prefilter.h"
 
@@ -66,11 +60,24 @@ typedef struct {
     int32_t next;
 } ac_out_t;
 
+/*
+ * `kws` is borrowed from the caller and outlives us. The two count arrays are
+ * scoring scratch: they were stack arrays sized by N_KEYWORDS, which stopped
+ * being a compile-time constant when the table became user-supplied. Holding
+ * them here keeps prefilter_score() allocation-free, which is the rule that
+ * mattered; single-threaded means one shared scratch is safe, and every entry
+ * point zeroes them before use.
+ */
 struct ac_automaton {
     ac_node_t *nodes;
     ac_out_t *outs;
     int32_t n_nodes;
     int32_t n_outs;
+
+    const kw_t *kws;
+    size_t n_kws;
+    int *text_counts;
+    int *label_counts;
 };
 
 /*
@@ -116,7 +123,7 @@ static int32_t ac_add_child(ac_t *ac, int32_t parent, unsigned char b, int32_t c
     return n;
 }
 
-int prefilter_init(arena_t *perm, ac_t **out)
+int prefilter_init(arena_t *perm, const kw_t *kws, size_t n_kws, ac_t **out)
 {
     size_t total = 0;
     size_t i;
@@ -125,23 +132,31 @@ int prefilter_init(arena_t *perm, ac_t **out)
     int32_t qh = 0, qt = 0;
     ac_t *ac;
 
-    if (perm == NULL || out == NULL)
+    if (perm == NULL || out == NULL || kws == NULL || n_kws == 0)
         return -EINVAL;
     *out = NULL;
 
-    for (i = 0; i < N_KEYWORDS; i++)
-        if (KEYWORDS[i].term != NULL)
-            total += strlen(KEYWORDS[i].term);
+    for (i = 0; i < n_kws; i++)
+        if (kws[i].term != NULL)
+            total += strlen(kws[i].term);
     cap = (int32_t)(total + 1);  /* root, plus at most one node per pattern byte */
 
     ac = arena_alloc(perm, sizeof *ac, 0);
     if (ac == NULL)
         return -ENOMEM;
+    ac->kws = kws;
+    ac->n_kws = n_kws;
     ac->nodes = arena_alloc(perm, (size_t)cap * sizeof *ac->nodes, 0);
     if (ac->nodes == NULL)
         return -ENOMEM;
-    ac->outs = arena_alloc(perm, N_KEYWORDS * sizeof *ac->outs, 0);
+    ac->outs = arena_alloc(perm, n_kws * sizeof *ac->outs, 0);
     if (ac->outs == NULL)
+        return -ENOMEM;
+    ac->text_counts = arena_alloc(perm, n_kws * sizeof *ac->text_counts, 0);
+    if (ac->text_counts == NULL)
+        return -ENOMEM;
+    ac->label_counts = arena_alloc(perm, n_kws * sizeof *ac->label_counts, 0);
+    if (ac->label_counts == NULL)
         return -ENOMEM;
     queue = arena_alloc(perm, (size_t)cap * sizeof *queue, 0);
     if (queue == NULL)
@@ -156,8 +171,8 @@ int prefilter_init(arena_t *perm, ac_t **out)
     ac->nodes[0].out_link = AC_NIL;
     ac->nodes[0].byte = 0;
 
-    for (i = 0; i < N_KEYWORDS; i++) {
-        const char *t = KEYWORDS[i].term;
+    for (i = 0; i < n_kws; i++) {
+        const char *t = kws[i].term;
         int32_t s = 0;
         size_t j;
 
@@ -271,65 +286,66 @@ static void ac_scan(const ac_t *ac, const char *text, int *counts)
  *
  * label_only terms ignore the title/body counts entirely.
  */
-static int ac_score_counts(const int *text_counts, const int *label_counts)
+static int ac_score_counts(const ac_t *ac)
 {
     int score = 0;
     size_t i;
 
-    for (i = 0; i < N_KEYWORDS; i++) {
-        int nl = label_counts[i] < KW_COUNT_CAP ? label_counts[i] : KW_COUNT_CAP;
+    for (i = 0; i < ac->n_kws; i++) {
+        int nl = ac->label_counts[i] < KW_COUNT_CAP ? ac->label_counts[i]
+                                                    : KW_COUNT_CAP;
         int nt = 0;
 
-        if (!KEYWORDS[i].label_only) {
+        if (!ac->kws[i].label_only) {
             int room = KW_COUNT_CAP - nl;
 
-            nt = text_counts[i] < room ? text_counts[i] : room;
+            nt = ac->text_counts[i] < room ? ac->text_counts[i] : room;
         }
-        score += KEYWORDS[i].weight * (KW_LABEL_MULTIPLIER * nl + nt);
+        score += ac->kws[i].weight * (KW_LABEL_MULTIPLIER * nl + nt);
     }
     return score;
 }
 
+/* Both scoring entry points start here: the scratch is shared, so it is only
+ * as good as the zeroing, and a missed reset would carry counts between two
+ * unrelated issues and inflate the second. */
+static void ac_reset_counts(const ac_t *ac)
+{
+    memset(ac->text_counts, 0, ac->n_kws * sizeof *ac->text_counts);
+    memset(ac->label_counts, 0, ac->n_kws * sizeof *ac->label_counts);
+}
+
 int prefilter_score(const ac_t *ac, const issue_t *iss)
 {
-    /* Fixed-size, stack-resident: 2 * N_KEYWORDS ints. No allocation here. */
-    int text_counts[N_KEYWORDS];
-    int label_counts[N_KEYWORDS];
     int i, n;
 
     if (ac == NULL || iss == NULL)
         return 0;
 
-    memset(text_counts, 0, sizeof text_counts);
-    memset(label_counts, 0, sizeof label_counts);
+    ac_reset_counts(ac);
 
-    ac_scan(ac, iss->title, text_counts);
-    ac_scan(ac, iss->body, text_counts);
+    ac_scan(ac, iss->title, ac->text_counts);
+    ac_scan(ac, iss->body, ac->text_counts);
 
     /* Clamp defensively: a malformed parse must not walk off the labels array. */
     n = iss->n_labels;
     if (n > GH_MAX_LABELS)
         n = GH_MAX_LABELS;
     for (i = 0; i < n; i++)
-        ac_scan(ac, iss->labels[i], label_counts);
+        ac_scan(ac, iss->labels[i], ac->label_counts);
 
-    return ac_score_counts(text_counts, label_counts);
+    return ac_score_counts(ac);
 }
 
 int prefilter_score_text(const ac_t *ac, const char *text, int is_label)
 {
-    int text_counts[N_KEYWORDS];
-    int label_counts[N_KEYWORDS];
-
     if (ac == NULL)
         return 0;
 
-    memset(text_counts, 0, sizeof text_counts);
-    memset(label_counts, 0, sizeof label_counts);
+    ac_reset_counts(ac);
+    ac_scan(ac, text, is_label ? ac->label_counts : ac->text_counts);
 
-    ac_scan(ac, text, is_label ? label_counts : text_counts);
-
-    return ac_score_counts(text_counts, label_counts);
+    return ac_score_counts(ac);
 }
 
 size_t prefilter_apply(const ac_t *ac, issue_t *issues, size_t n)

@@ -40,9 +40,12 @@ unsigned long gist_http_calls;
 /* Exposed (not in gist.h) so the escaping test can drive the real builder. */
 const char *gist_build_body(arena_t *a, const char *markdown, size_t *len_out);
 
+/* From the user's config file; set once by gist_init(). */
+static const char *g_gist_id = GIST_ID;
+
 static int gist_id_is_placeholder(void)
 {
-    return strcmp(GIST_ID, "REPLACE_ME_WITH_GIST_ID") == 0;
+    return strcmp(g_gist_id, "REPLACE_ME_WITH_GIST_ID") == 0;
 }
 
 /*
@@ -121,10 +124,13 @@ const char *gist_build_body(arena_t *a, const char *markdown, size_t *len_out)
     return body;
 }
 
-int gist_init(void)
+int gist_init(const char *gist_id)
 {
-    if (gist_id_is_placeholder() || GIST_ID[0] == '\0') {
-        LOGE("gist: GIST_ID is still the placeholder. Create the gist once with "
+    if (gist_id != NULL && gist_id[0] != '\0')
+        g_gist_id = gist_id;
+
+    if (gist_id_is_placeholder() || g_gist_id[0] == '\0') {
+        LOGE("gist: no gist id set. Create the gist once with "
              "`gh gist create -d issuewatch /tmp/" GIST_FILENAME "` (seeded under "
              "that name, which is the file the publish replaces), put the hex id "
              "from its URL in src/config.h and rebuild. GH_TOKEN must be a "
@@ -132,7 +138,7 @@ int gist_init(void)
              "write gists.");
         return -1;
     }
-    LOGI("gist: publishing the board to %s/%s", GIST_WEB_BASE, GIST_ID);
+    LOGI("gist: publishing the board to %s/%s", GIST_WEB_BASE, g_gist_id);
     return 0;
 }
 
@@ -159,7 +165,7 @@ int gist_publish(arena_t *a, const char *markdown, int dry_run)
          * gets eyeballed before a gist id is ever configured.
          */
         printf("[dry-run] gist %s/%s file %s, %zu bytes, not published:\n%s\n",
-               GIST_WEB_BASE, GIST_ID, GIST_FILENAME, strlen(markdown), markdown);
+               GIST_WEB_BASE, g_gist_id, GIST_FILENAME, strlen(markdown), markdown);
         fflush(stdout);
         return 0;
     }
@@ -181,7 +187,7 @@ int gist_publish(arena_t *a, const char *markdown, int dry_run)
     if (body == NULL)
         return -ENOMEM;
 
-    url = arena_printf(a, "%s/%s", GIST_API_BASE, GIST_ID);
+    url = arena_printf(a, "%s/%s", GIST_API_BASE, g_gist_id);
     hdrs[nh++] = arena_printf(a, "Authorization: Bearer %s", tok);
     hdrs[nh++] = "Accept: application/vnd.github+json";
     hdrs[nh++] = "X-GitHub-Api-Version: 2022-11-28";
@@ -226,7 +232,7 @@ int gist_publish(arena_t *a, const char *markdown, int dry_run)
              "GH_TOKEN lacks the `gist` scope; the token presents [%s]. Gists "
              "need a classic token with `gist` checked -- a fine-grained PAT "
              "cannot write them. Otherwise GIST_ID is wrong.",
-             resp.status, GIST_ID,
+             resp.status, g_gist_id,
              resp.oauth_scopes[0] != '\0' ? resp.oauth_scopes : "no scopes reported");
         return -EACCES;
     }
@@ -235,6 +241,6 @@ int gist_publish(arena_t *a, const char *markdown, int dry_run)
         return -EIO;
     }
 
-    LOGI("gist: board published, %zu bytes to %s/%s", body_len, GIST_WEB_BASE, GIST_ID);
+    LOGI("gist: board published, %zu bytes to %s/%s", body_len, GIST_WEB_BASE, g_gist_id);
     return 0;
 }

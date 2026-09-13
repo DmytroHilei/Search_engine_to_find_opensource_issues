@@ -1,3 +1,5 @@
+#define CONFIG_WANT_KEYWORDS
+
 /*
  * Prefilter tests. Pure logic, no I/O, so this leans hard on the automaton:
  * phrases, case folding, overlap, the count cap, negative weights, label_only,
@@ -416,20 +418,22 @@ int main(void)
         fprintf(stderr, "arena_init failed\n");
         return 2;
     }
-    if (prefilter_init(&g_arena, &g_ac) != 0 || g_ac == NULL) {
+    if (prefilter_init(&g_arena, KEYWORDS, N_KEYWORDS, &g_ac) != 0 || g_ac == NULL) {
         fprintf(stderr, "prefilter_init failed\n");
         return 2;
     }
 
     /* Bad arguments are rejected, not dereferenced. */
     probe = g_ac;
-    CHECK(prefilter_init(NULL, &probe) < 0);
-    CHECK(prefilter_init(&g_arena, NULL) < 0);
+    CHECK(prefilter_init(NULL, KEYWORDS, N_KEYWORDS, &probe) < 0);
+    CHECK(prefilter_init(&g_arena, KEYWORDS, N_KEYWORDS, NULL) < 0);
+    CHECK(prefilter_init(&g_arena, NULL, 0, &probe) < 0);
+    CHECK(prefilter_init(&g_arena, KEYWORDS, 0, &probe) < 0);
 
     /* An exhausted arena must yield a negative return and a NULL automaton. */
     if (arena_init(&tiny, 64) == 0) {
         probe = g_ac;
-        CHECK(prefilter_init(&tiny, &probe) < 0);
+        CHECK(prefilter_init(&tiny, KEYWORDS, N_KEYWORDS, &probe) < 0);
         CHECK(probe == NULL);
         arena_destroy(&tiny);
     }

@@ -23,44 +23,63 @@ On Debian/Ubuntu: `apt install libcurl4-openssl-dev pkg-config`.
 
 ## Configure
 
-Everything tunable lives in [src/config.h](src/config.h) as preprocessor macros —
-watched repos, keyword weights, judge backend, thresholds, resource caps. There
-is no runtime config file and no CLI flags for tuning; edit the header and
-rebuild.
+Two layers, split by whether the setting has a right answer.
 
-At minimum, before a real run:
-
-1. `WATCHED_REPOS` — the repos you actually care about.
-2. `USER_PROFILE` — what you work on. This goes into the LLM system prompt and
-   is the single biggest lever on result quality.
-3. `KEYWORDS[]` — expect a few tuning iterations. Use `--dry-run` for that.
-Those three are committed. The next two are credentials, so they go in
-`src/config.local.h`, which is gitignored — `config.h` includes it if present
-and only defines placeholders for what it did not set:
+**Your part is one text file.** Copy the template, edit it, done — no rebuild:
 
 ```sh
-cp src/config.local.h.example src/config.local.h
+install -Dm600 src/config.example ~/.config/issuewatch/config
+$EDITOR ~/.config/issuewatch/config
 ```
 
-4. `NTFY_TOPIC` — **replace the default.** Generate one with
-   `openssl rand -hex 16`. This one is not a label, it is the whole of the
-   authentication; see below.
-5. `GIST_ID` — the board is published here. Create one secret gist, once, and
-   paste its id (the hex from the URL, not the whole URL):
+It holds the five things that differ per person:
 
-   ```sh
-   printf '# issuewatch\n' > /tmp/issuewatch-board.md
-   gh gist create -d issuewatch /tmp/issuewatch-board.md
-   ```
+| Setting | What it is |
+| --- | --- |
+| `repo owner/name` | the repos you actually care about, one per line |
+| `profile <text>` | what you work on. Goes into the LLM system prompt and is the single biggest lever on result quality |
+| `keyword <weight> <term...>` | the prefilter table. `label-keyword` for label-only terms; the term is the rest of the line, so phrases need no quoting, and a negative weight pushes noise *below* the gate |
+| `ntfy-topic` | **generate your own** with `openssl rand -hex 16`. Not a label — the whole of the authentication; see below |
+| `gist-id` | where the board is published |
 
-   Secret is `gh gist create`'s default; `--public` is the opt-out. Seed it
-   under the name `GIST_FILENAME` already uses — the publish PATCHes that one
-   file, so a differently named seed is not replaced, it is joined.
+`# ` comments, blank lines ignored. An unknown setting is an **error**, not a
+silent no-op — a typo that did nothing would leave you watching someone else's
+repositories while the log said everything was fine. Any section you leave out
+keeps its built-in default; any section you use replaces that default entirely,
+so to drop one repo, list the ones you want.
 
-   Your `GH_TOKEN` needs `gist` scope for this, which a fine-grained PAT cannot
-   grant — use a classic token with `gist` plus public-repo read. Leave
-   `GIST_ID` at the placeholder and the board simply does not publish; the
-   daemon still runs, and `--dry-run` still prints the board to stdout.
+`--config PATH` overrides the location. `chmod 600` matters: this file holds
+your ntfy topic.
+
+Keywords and profile have to move together. The prefilter runs *before* the
+LLM, so an issue under `KW_SCORE_MIN` is dropped without ever being judged — set
+a profile about Rust and WASM while the keyword table still scores `cuda` and
+`matmul`, and you get an empty board with nothing in the log to explain it.
+
+**Everything else stays in [src/config.h](src/config.h)** as compile-time
+macros: batch size, context window, score thresholds, timeouts, retention,
+resource caps. These were tuned against a measured corpus on specific hardware
+and have a right answer; a knob nobody re-measures is worse than no knob. Edit
+the header and rebuild. The only argv tuning flag is `--model NAME`, because
+which model fits is bounded by the GPU in the machine.
+
+### Creating the gist
+
+Once, then paste the hex id from the URL (not the whole URL) into `gist-id`:
+
+```sh
+printf '# issuewatch\n' > /tmp/issuewatch-board.md
+gh gist create -d issuewatch /tmp/issuewatch-board.md
+```
+
+Secret is `gh gist create`'s default; `--public` is the opt-out. Seed it under
+the name `GIST_FILENAME` already uses — the publish PATCHes that one file, so a
+differently named seed is not replaced, it is joined.
+
+Your `GH_TOKEN` needs `gist` scope for this, which a fine-grained PAT cannot
+grant — use a classic token with `gist` plus public-repo read. Leave `gist-id`
+unset and the board simply does not publish; the daemon still runs, and
+`--dry-run` still prints the board to stdout.
 
 ### Why the topic matters
 
@@ -69,20 +88,19 @@ The read side leaks only public GitHub data, but the write side means anyone who
 guesses your topic can push arbitrary notifications to your phone — any title,
 any body, `Priority: 5` so it breaks through Focus. Use a long random topic, or
 self-host ntfy with access control and set `NTFY_TOKEN`. `notify_init()` refuses
-to run with the shipped placeholder.
+to run on the placeholder.
 
-*Knows* includes reading it here: this repo is public, so a real topic committed
-to `config.h` is a published credential. That is why it lives in the untracked
-`src/config.local.h` instead. Nothing enforces this but the gitignore — check
-`git diff --cached` before a push that touches configuration.
+*Knows* includes reading it in a repo: a real topic committed anywhere public is
+a published credential. That is why it lives in your config file, outside the
+checkout, and why `src/config.example` ships only placeholders.
 
 ## Secrets
 
-Never in `config.h`. Read from the environment at startup:
+Tokens are never in a file at all. Read from the environment at startup:
 
 | Variable | Required |
 | --- | --- |
-| `GH_TOKEN` | always — needs `gist` scope to publish the board, so a classic token; a fine-grained PAT with public-repo read is enough only with `GIST_ID` left unset |
+| `GH_TOKEN` | always — needs `gist` scope to publish the board, so a classic token; a fine-grained PAT with public-repo read is enough only with `gist-id` left unset |
 | `ANTHROPIC_API_KEY` | only for `JUDGE_API` / `JUDGE_HYBRID` |
 | `NTFY_TOKEN` | only for a self-hosted ntfy with auth |
 
