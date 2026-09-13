@@ -390,8 +390,12 @@ static int ollama_post(arena_t *a, void *pool, const char *model,
         !yyjson_mut_arr_add_val(msgs, usr_m))
         return -1;
 
-    /* temperature 0 so the same batch scores the same twice -- not a knob. */
+    /* temperature 0 so the same batch scores the same twice -- not a knob.
+     * num_ctx is sent rather than inherited: it is a server-side default the
+     * environment can change, and the judge degrades sharply when the prompt
+     * approaches it. See OLLAMA_NUM_CTX. */
     if (!yyjson_mut_obj_add_int(doc, opts, "num_gpu", OLLAMA_NUM_GPU) ||
+        !yyjson_mut_obj_add_int(doc, opts, "num_ctx", OLLAMA_NUM_CTX) ||
         !yyjson_mut_obj_add_int(doc, opts, "temperature", 0))
         return -1;
 

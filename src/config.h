@@ -217,11 +217,36 @@ static const kw_t KEYWORDS[] = {
 #define OLLAMA_MODEL "qwen3:4b"
 #define OLLAMA_SCREEN_MODEL    "qwen3:1.7b"  /* JUDGE_HYBRID screening pass */
 #define OLLAMA_NUM_GPU         999   /* 0 = pure CPU */
+/*
+ * Pinned rather than inherited. Ollama's own default is 4096 today, but it is a
+ * server-side setting that OLLAMA_CONTEXT_LENGTH can change out from under this
+ * daemon -- and the judge's behaviour depends on it sharply, so leaving it to
+ * the environment is exactly the kind of implicit override config.h exists to
+ * prevent.
+ *
+ * 4096, not larger, on measurement: at 8192 the same batch of four scored every
+ * issue 0, where 4096 graded them 9/8/7/6. Bigger is not better here.
+ */
+#define OLLAMA_NUM_CTX         4096
 #define ANTHROPIC_URL          "https://api.anthropic.com/v1/messages"
 #define ANTHROPIC_VERSION      "2023-06-01"
 #define ANTHROPIC_MODEL        "claude-haiku-4-5-20251001"
 
-#define LLM_BATCH_SIZE         8
+/*
+ * Issues per judge request. Was 8, which qwen3:4b cannot hold apart: measured
+ * on eight real tt-metal issues at ~3400 prompt tokens, 8 of 8 verdicts came
+ * back describing a DIFFERENT issue in the batch, and the board published each
+ * issue next to another one's reasoning. At 4 the same issues cross-reference
+ * zero times and score sensibly (9, 8, 7, 6 against four 0s).
+ *
+ * Cost is twice the requests -- ~21 batches instead of 11 for a typical cycle,
+ * so the judge phase roughly doubles. It dominates the cycle either way, and a
+ * cycle has three hours.
+ *
+ * Raising this needs the cross-contamination test re-run, not just a glance at
+ * the scores: the failure is silent and produces a board that looks fine.
+ */
+#define LLM_BATCH_SIZE         4
 #define LLM_BODY_TRUNC         1200
 #define LLM_BODY_HEAD          900   /* head/tail split of a truncated body */
 #define LLM_SCORE_MIN          6     /* 0..10 from the model */
