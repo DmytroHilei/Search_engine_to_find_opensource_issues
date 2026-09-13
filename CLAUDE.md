@@ -168,15 +168,29 @@ cast or a `(void)x` unless the variable is genuinely unused by design.
     cycle's primary output now, so rule 4 covers it exactly as it covers
     notification. A render that overflows is a failure, not a short board: a
     truncated board reads as "this is everything open".
-14. **Whether an issue is paid is decided in C, not by the model.**
-    `payload_shows_payment()` reads the title and labels, the answer goes into
-    the prompt as the `payment:` line, and `judge_parse_verdicts()` enforces it
-    on the way back: unpaid is capped at `JUDGE_UNPAID_CAP`, paid is floored at
-    `JUDGE_PAID_FLOOR` even against `keep=false`. Both directions are load-
-    bearing and both were observed live -- an 8B judge invented a bounty for an
-    issue labelled only "module: cuda", and scored tinygrad #3039 zero while its
-    own reason read "$500 bounty for parallel scan". Do not relax either one
-    into a prompt instruction; that is where they started.
+14. **Facts about the payload are decided in C, not by the model.** Two of them
+    now, both computed before the prompt, both stated in it, both enforced on
+    the reply: payment and staleness. The pattern is the point -- if the answer
+    is a substring search or date arithmetic, the model will get it wrong in
+    both directions and a cap alone cannot recover the misses.
+    *Staleness*: `issue_idle_days()` against `updated_at`; over `JUDGE_STALE_DAYS`
+    an unpaid issue is capped at `JUDGE_STALE_CAP`, below `LLM_SCORE_MIN`. It
+    exists because the three criteria measure how well an issue is *written*,
+    and a well-written issue stays well-written after everyone stopped caring:
+    on a saturated 200-row board, 106 rows sat at 8 and 16 of a 45-row sample
+    had been idle over a year, indistinguishable through the rubric. An
+    unparseable timestamp must read as unknown, never stale.
+    *Payment*: 
+`payload_shows_payment()` reads the title and labels; unpaid is
+    capped at `JUDGE_UNPAID_CAP`, paid is floored at `JUDGE_PAID_FLOOR` even
+    against `keep=false`. Both directions are load-bearing and both were observed
+    live -- an 8B judge invented a bounty for an issue labelled only "module:
+    cuda", and scored tinygrad #3039 zero while its own reason read "$500 bounty
+    for parallel scan". What counts as payment is deliberately narrow: `gsoc` was
+    in that list and put 16 OpenCV idea-list entries into the top band of a real
+    board, ahead of every genuine bounty. A label naming a *programme* is not
+    claimable money. Do not relax either gate into a prompt instruction; that is
+    where they started.
 15. **Re-measure the judge prompt, never just read it.** The rubric in
     `JUDGE_SYSTEM_PROMPT` is tuned against a rescore of ~60 real issues at
     `LLM_BATCH_SIZE`, and edits that read as clarifications have twice collapsed

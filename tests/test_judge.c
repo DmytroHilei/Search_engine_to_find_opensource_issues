@@ -6,11 +6,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "../tests/test_util.h"
 
 #include "core/arena.h"
 #include "config.h"
+#include "core/util.h"
 #include "net/github.h"
 #include "pipeline/judge.h"
 
@@ -30,6 +32,22 @@ extern const char *judge_render_format_schema(arena_t *a, size_t n);
 #endif
 
 static arena_t g_arena;
+
+/*
+ * Stamps a just-now updated_at. issues_reset() leaves it NULL, which reads as
+ * "unknown age" and is correct for tests about anything else -- but a test
+ * asserting a normal score should not depend on that reading.
+ */
+static void fresh(issue_t *is, size_t n)
+{
+    static char now[32];
+    size_t i;
+
+    if (now[0] == '\0')
+        iso8601_format(time(NULL), now, sizeof now);
+    for (i = 0; i < n; i++)
+        is[i].updated_at = now;
+}
 
 static void issues_reset(issue_t *is, size_t n)
 {
@@ -272,6 +290,90 @@ static void test_a_paid_issue_survives_keep_false(void)
  * are ordinary systems-programming titles, and both would have been floored to
  * the top of the board by a naive substring search for "$".
  */
+/*
+ * GSoC is not a bounty. OpenCV keeps a permanent idea list, so the label marks
+ * "somebody could propose this one summer", not claimable money -- it needs an
+ * accepted student inside a seasonal programme. When it counted as payment, 16
+ * of the 19 rows in the top band of a real 200-row board were OpenCV idea
+ * entries, outranking every genuine bounty.
+ */
+static void test_gsoc_is_not_payment(void)
+{
+    issue_t is[2];
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/verdicts_ok.json", &len);
+    issues_reset(is, 2);
+
+    is[0].title = "GSOC: Dynamic CUDA Support in OpenCV DNN";
+    is[1].title = "Add support for libcamera";
+    is[1].labels[0] = "GSoC";
+    is[1].labels[1] = "feature";
+    is[1].n_labels = 2;
+    fresh(is, 2);
+
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 2), 2);
+    free(json);
+
+    /* Scored on merit in step 2, not floored into the money band. */
+    CHECK_EQ(is[0].llm_score, 8);        /* keep=true, score 8 */
+    CHECK_EQ(is[1].llm_score, 0);        /* keep=false */
+}
+
+/*
+ * Staleness. The three criteria measure how well an issue is WRITTEN, and a
+ * well-written issue stays well-written after everyone stopped caring: on a
+ * saturated board, 16 of a 45-row sample of the top unpaid band had been idle
+ * over a year. They are demoted below LLM_SCORE_MIN, not deleted.
+ */
+static void test_an_abandoned_issue_is_demoted(void)
+{
+    issue_t is[3];
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/verdicts_ok.json", &len);
+    issues_reset(is, 3);
+    fresh(is, 3);
+    is[0].updated_at = "2019-01-01T00:00:00Z";      /* years idle */
+
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 3), 3);
+    free(json);
+
+    CHECK_EQ(is[0].llm_score, 5);        /* was 8 */
+    CHECK_EQ(is[2].llm_score, 6);        /* fresh, untouched */
+}
+
+/*
+ * Two ways the cap must not fire. An unparseable timestamp reads as unknown,
+ * never as stale -- a parse bug would otherwise quietly empty the board. And a
+ * paid issue never reaches the check at all: tinygrad's bounties are years old
+ * and still the most valuable rows on the board.
+ */
+static void test_staleness_never_fires_on_unknown_or_paid(void)
+{
+    issue_t is[3];
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/verdicts_ok.json", &len);
+    issues_reset(is, 3);
+    fresh(is, 3);
+
+    is[0].updated_at = NULL;
+    is[1].updated_at = "not a timestamp";
+    is[2].updated_at = "2019-01-01T00:00:00Z";
+    is[2].title = "[Bounty] years old and still unclaimed";
+
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 3), 3);
+    free(json);
+
+    CHECK_EQ(is[0].llm_score, 8);        /* unknown age: untouched */
+    CHECK_EQ(is[1].llm_score, 0);        /* keep=false, unrelated */
+    CHECK_EQ(is[2].llm_score, 9);        /* paid: floored, never demoted */
+}
+
 static void test_a_bare_dollar_is_not_an_amount(void)
 {
     issue_t is[2];
@@ -584,6 +686,9 @@ int main(void)
     TEST_RUN(test_why_stops_on_a_boundary);
     TEST_RUN(test_unpaid_cannot_reach_the_top_band);
     TEST_RUN(test_a_paid_issue_survives_keep_false);
+    TEST_RUN(test_gsoc_is_not_payment);
+    TEST_RUN(test_an_abandoned_issue_is_demoted);
+    TEST_RUN(test_staleness_never_fires_on_unknown_or_paid);
     TEST_RUN(test_a_bare_dollar_is_not_an_amount);
     TEST_RUN(test_the_cap_only_lowers);
     TEST_RUN(test_parse_ignores_model_index);

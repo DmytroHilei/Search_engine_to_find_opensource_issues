@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "yyjson.h"
 
@@ -113,6 +114,11 @@ _Static_assert(LLM_WHY_MAX > 0, "LLM_WHY_MAX must be positive");
     "  3-5  on-topic project, ordinary report: it shows none or one of them\n"    \
     "  6-7  two of them, in this developer's areas\n"                             \
     "  8    all three, in this developer's areas\n"                               \
+    "Then read the `last activity:` line, which is also computed for you. An "    \
+    "issue marked ABANDONED has had no activity in a year: whatever it shows, "   \
+    "nobody is working on it or reviewing it, so score it 5 at most. A thin "     \
+    "issue somebody replied to yesterday is worth more than a perfect one "       \
+    "everybody stopped answering.\n"                                              \
     "Between two defensible scores in step 2, give the lower one.\n"              \
     "Set keep=false for anything you would not push to them at all.\n"            \
     "`why` is required either way, including for a paid issue: say what the "     \
@@ -140,6 +146,30 @@ _Static_assert(LLM_WHY_MAX > 0, "LLM_WHY_MAX must be positive");
  */
 #define JUDGE_UNPAID_CAP  8    /* top of step 2 -- unpaid cannot outrank money */
 #define JUDGE_PAID_FLOOR  9    /* step 1 says 10; 9 leaves room to disagree     */
+
+/*
+ * Staleness, the same shape: an objective fact about the payload that the model
+ * cannot be asked to compute, because it means doing date arithmetic against
+ * today in its head.
+ *
+ * It exists because the rubric's three criteria measure how well an issue is
+ * WRITTEN, and a well-written issue stays well-written after everyone has
+ * stopped caring about it. On a saturated 200-row board, 106 rows sat at 8 and
+ * the age distribution of a 45-row sample was bimodal -- p25 fourteen days, p75
+ * 1652 days -- with 16 of 45 untouched for over a year. Those read identically
+ * to the fresh ones through the three criteria: reproducer, file, proposed fix,
+ * all present, all still true, nobody home.
+ *
+ * A year of silence in a repo this active means abandoned or blocked, and for
+ * the one question this program answers -- what can I usefully pick up now --
+ * that is worse than a thin issue somebody replied to yesterday. Demoted rather
+ * than dropped: it stays visible below the live work instead of crowding it.
+ *
+ * Paid issues never reach this. Step 1 short-circuits them, and a bounty is
+ * still a bounty if the thread has been quiet -- tinygrad's are years old.
+ */
+#define JUDGE_STALE_DAYS  365
+#define JUDGE_STALE_CAP   5    /* below LLM_SCORE_MIN: off the board, not deleted */
 
 /* Case-insensitive substring, ASCII. needle is a literal, never user input. */
 static int ci_contains(const char *hay, const char *needle)
@@ -190,10 +220,35 @@ static int has_amount(const char *s)
  * functions and permission grants far more often than money. "usd" and "eur" are
  * absent because as bare substrings they fire on ordinary words -- "eur" is
  * inside "neural" and "heuristic", which is most of this corpus.
+ *
+ * "gsoc" was here and was removed, which is worth spelling out because it looks
+ * like money and is not. OpenCV keeps a permanent GSoC IDEA LIST, so the label
+ * marks "somebody could propose this one summer", not claimable cash: it needs
+ * an accepted student inside a seasonal programme. With gsoc in this list, 16 of
+ * the 19 rows in the top band of a real 200-row board were OpenCV idea entries
+ * -- "Julia Bindings for OpenCV", "HEIF format support", one filed in 2023 --
+ * outranking every genuine bounty. It stays a prefilter keyword, so such issues
+ * still reach the judge; it just no longer forces the band reserved for money.
  */
+/*
+ * Days since the issue was last touched, or -1 when that cannot be determined:
+ * an unparseable or absent updated_at must read as "unknown", never as "stale",
+ * because the cap is a demotion and a parse bug would quietly empty the board.
+ */
+static long issue_idle_days(const issue_t *is, time_t now)
+{
+    time_t updated;
+
+    if (is->updated_at == NULL || iso8601_parse(is->updated_at, &updated) != 0)
+        return -1;
+    if (updated > now)
+        return 0;                          /* clock skew, not a stale issue */
+    return (long)((now - updated) / (24 * 60 * 60));
+}
+
 static int payload_shows_payment(const issue_t *is)
 {
-    static const char *const WORD[] = { "bounty", "prize", "stipend", "gsoc" };
+    static const char *const WORD[] = { "bounty", "prize", "stipend" };
     size_t w;
     int i;
 
@@ -387,6 +442,7 @@ static const char *build_batch_prompt(arena_t *a, const issue_t *issues, size_t 
     sbuf_t sb;
     size_t cap = 512;
     size_t i;
+    time_t now = time(NULL);
     int k;
 
     for (i = 0; i < n; i++) {
@@ -426,10 +482,22 @@ static const char *build_batch_prompt(arena_t *a, const issue_t *issues, size_t 
          * cases that matter: an 8B judge read "[Bounty] Outline of ..." as
          * unpaid and scored the real tinygrad bounty 8, while inventing a
          * bounty programme for three tt-metal issues that had none. */
-        sb_printf(&sb, "payment: %s\ncomments: %d\nbody:\n%s\n",
-                  payload_shows_payment(&issues[i]) ? "YES -- title or labels name money"
-                                                    : "none in title or labels",
-                  issues[i].comments, bodies[i]);
+        {
+            long idle = issue_idle_days(&issues[i], now);
+            char age[64];
+
+            if (idle < 0)
+                snprintf(age, sizeof age, "unknown");
+            else
+                snprintf(age, sizeof age, "%ld day%s ago%s", idle,
+                         idle == 1 ? "" : "s",
+                         idle > JUDGE_STALE_DAYS ? " -- ABANDONED" : "");
+            sb_printf(&sb, "payment: %s\nlast activity: %s\ncomments: %d\nbody:\n%s\n",
+                      payload_shows_payment(&issues[i])
+                          ? "YES -- title or labels name money"
+                          : "none in title or labels",
+                      age, issues[i].comments, bodies[i]);
+        }
     }
 
     if (sb.overflow) {
@@ -1175,6 +1243,8 @@ int judge_parse_verdicts(arena_t *a, const char *json, size_t json_len,
      */
     size_t pos = 0;
     int applied = 0;
+    int stale = 0;
+    time_t now = time(NULL);
     int rc;
 
     if (a == NULL || json == NULL || (n > 0 && issues == NULL))
@@ -1262,12 +1332,26 @@ int judge_parse_verdicts(arena_t *a, const char *json, size_t json_len,
                      yyjson_is_str(vw) ? yyjson_get_str(vw) : "(no reason)");
                 score = JUDGE_PAID_FLOOR;
             }
-        } else if (score > JUDGE_UNPAID_CAP) {
-            LOGW("judge: %s#%d scored %lld with no payment in title or labels -- "
-                 "capped at %d (model said: %s)", issues[idx].repo, issues[idx].number,
-                 score, JUDGE_UNPAID_CAP,
-                 yyjson_is_str(vw) ? yyjson_get_str(vw) : "(no reason)");
-            score = JUDGE_UNPAID_CAP;
+        } else {
+            long idle;
+
+            if (score > JUDGE_UNPAID_CAP) {
+                LOGW("judge: %s#%d scored %lld with no payment in title or "
+                     "labels -- capped at %d (model said: %s)", issues[idx].repo,
+                     issues[idx].number, score, JUDGE_UNPAID_CAP,
+                     yyjson_is_str(vw) ? yyjson_get_str(vw) : "(no reason)");
+                score = JUDGE_UNPAID_CAP;
+            }
+            /* After the unpaid cap, so the log reports the score the issue
+             * would actually have held had it not gone quiet. */
+            idle = issue_idle_days(&issues[idx], now);
+            if (idle > JUDGE_STALE_DAYS && score > JUDGE_STALE_CAP) {
+                LOGD("judge: %s#%d scored %lld but has been idle %ld days -- "
+                     "capped at %d", issues[idx].repo, issues[idx].number,
+                     score, idle, JUDGE_STALE_CAP);
+                stale++;
+                score = JUDGE_STALE_CAP;
+            }
         }
 
         if (yyjson_is_str(vw)) {
@@ -1294,6 +1378,12 @@ int judge_parse_verdicts(arena_t *a, const char *json, size_t json_len,
     }
 
     yyjson_doc_free(doc);
+    /* Per-issue detail is LOGD; the count is not, because a batch where most
+     * issues were demoted is the signal that the backfill has reached a repo's
+     * dead backlog, and that is worth seeing without -v. */
+    if (stale > 0)
+        LOGI("judge: %d of %d demoted to %d, idle over %d days",
+             stale, applied, JUDGE_STALE_CAP, JUDGE_STALE_DAYS);
     return rc < 0 ? rc : applied;
 }
 
