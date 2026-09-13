@@ -92,6 +92,7 @@ If the `gh` CLI is already logged in, borrow its token rather than minting a
 second one:
 
 ```sh
+
 export GH_TOKEN="$(gh auth token)"
 ```
 
@@ -123,8 +124,37 @@ systemd reads none of this — see the timer section for `~/.config/issuewatch/e
 ```sh
 ./issuewatch --dry-run      # print to stdout, send nothing. Tune with this.
 ./issuewatch --oneshot      # one cycle, exit. What the timer runs.
+./issuewatch --runs 45      # 45 cycles 10s apart. Covers the whole backfill.
 ./issuewatch --daemon       # sleep-loop. Supported, but see below.
 ```
+
+### The judge model
+
+`qwen3:8b` by default, which needs about 7.2 GB of VRAM with `OLLAMA_NUM_CTX`
+— it fits an 8 GB card with roughly 0.5 GB to spare and nothing else on the
+GPU. On a smaller card:
+
+```sh
+./issuewatch --model qwen3:4b
+```
+
+That fits in ~4 GB and is the only supported alternative, but understand what
+you are trading. Benchmarked against tinygrad's three open, unassigned
+bounties:
+
+| | pairing errors | real bounties kept | VRAM |
+| --- | --- | --- | --- |
+| `qwen3:8b` | 0 of 8 | **3 of 3** (10, 9, 8) | ~7.2 GB |
+| `qwen3:4b` | 1 of 2 | **0 of 3** | ~4 GB |
+
+4b scored every real bounty 0, reasoning "bounty is claimed and unassigned" —
+false and self-contradictory at once. It will run, and it will miss the thing
+you built this for.
+
+Neither model survives a batch of 8: at `LLM_BATCH_SIZE 8` even 8b returned 6
+of 8 verdicts describing a *different* issue in the batch, so each issue was
+published beside another one's reasoning. 4 is the tested value; raising it
+needs that cross-contamination check re-run, not a glance at the scores.
 
 ### Prefer the timer over the daemon
 

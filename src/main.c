@@ -49,7 +49,8 @@ static void install_signals(void)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s [--oneshot | --daemon] [--runs N] [--dry-run] [-v] [-q]\n"
+            "usage: %s [--oneshot | --daemon] [--runs N] [--model NAME]\n"
+            "                  [--dry-run] [-v] [-q]\n"
             "\n"
             "  --oneshot   run one poll cycle and exit (default)\n"
             "  --daemon    loop every POLL_INTERVAL_SEC; prefer a systemd timer\n"
@@ -57,11 +58,15 @@ static void usage(const char *argv0)
             "              sweeps one repo per cycle, so this is how you cover\n"
             "              every watched repo without waiting days for the timer.\n"
             "  --dry-run   print notifications to stdout, send nothing\n"
+            "  --model N   Ollama model to judge with (default %s).\n"
+            "              %s needs ~7.2 GB of VRAM; on a smaller card try\n"
+            "              %s, which fits in ~4 GB but scores real bounties 0.\n"
             "  -v          debug logging   -q  errors only\n"
             "\n"
             "environment: GH_TOKEN (required), ANTHROPIC_API_KEY (JUDGE_API,\n"
             "JUDGE_HYBRID), NTFY_TOKEN (optional, self-hosted ntfy auth)\n",
-            argv0, RUNS_DELAY_SEC, RUNS_MAX);
+            argv0, RUNS_DELAY_SEC, RUNS_MAX,
+            OLLAMA_MODEL, OLLAMA_MODEL, OLLAMA_MODEL_SMALL);
 }
 
 /*
@@ -299,6 +304,7 @@ int main(int argc, char **argv)
     run_mode_t mode = MODE_ONESHOT;
     int dry_run = 0;
     long runs = 1, done = 0, failed = 0;
+    const char *model = NULL;
     int rc = EXIT_FAILURE, cycle_rc;
     arena_t perm = {0}, cycle = {0};
     state_t st = {0};
@@ -311,6 +317,13 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "--oneshot") == 0)      mode = MODE_ONESHOT;
         else if (strcmp(argv[i], "--daemon") == 0)  mode = MODE_DAEMON;
         else if (strcmp(argv[i], "--dry-run") == 0) dry_run = 1;
+        else if (strcmp(argv[i], "--model") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "--model needs a name, e.g. " OLLAMA_MODEL_SMALL "\n");
+                return EXIT_FAILURE;
+            }
+            model = argv[++i];          /* argv outlives the process */
+        }
         else if (strcmp(argv[i], "--runs") == 0) {
             char *end;
 
@@ -359,6 +372,8 @@ int main(int argc, char **argv)
         goto out;
     }
 
+    /* Before judge_init(), which logs the model it will actually use. */
+    judge_set_model(model);
     if (judge_init() != 0) {
         LOGE("judge backend unavailable");
         goto out;

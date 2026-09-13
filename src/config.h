@@ -214,7 +214,24 @@ static const kw_t KEYWORDS[] = {
 #define JUDGE_MODE             JUDGE_LOCAL
 
 #define OLLAMA_URL   "http://127.0.0.1:11434/api/chat"
-#define OLLAMA_MODEL "qwen3:4b"
+/*
+ * Default judge. qwen3:8b at Q4 is ~5.6 GB loaded and needs roughly 7.2 GB of
+ * VRAM with OLLAMA_NUM_CTX -- it fits an 8 GB card with about 0.5 GB to spare
+ * and nothing else running on the GPU.
+ *
+ * It is the default because 4b gets the one question that matters wrong.
+ * Benchmarked on tinygrad's three open unassigned bounties, 4b scored all three
+ * 0 ("bounty is claimed and unassigned", which is both false and
+ * self-contradictory) while 8b scored them 10, 9 and 8 and named them correctly
+ * as unclaimed. A judge that cannot recognise an unclaimed bounty is not doing
+ * the job this daemon exists for.
+ *
+ * OLLAMA_MODEL_SMALL is kept working and selectable with --model for anyone on
+ * a smaller card; it is not merely untested, it is known worse. Neither model
+ * survives a batch of 8 -- see LLM_BATCH_SIZE.
+ */
+#define OLLAMA_MODEL           "qwen3:8b"
+#define OLLAMA_MODEL_SMALL     "qwen3:4b"
 #define OLLAMA_SCREEN_MODEL    "qwen3:1.7b"  /* JUDGE_HYBRID screening pass */
 #define OLLAMA_NUM_GPU         999   /* 0 = pure CPU */
 /*

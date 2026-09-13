@@ -18,6 +18,13 @@ published to a secret gist, with one summary push to ntfy per cycle. Runs every
 - **All user configuration lives in `src/config.h`** as preprocessor macros.
   There is no runtime config file, no CLI flags for tuning, no env-var
   overrides for behaviour. Env vars are for *secrets only*.
+  `--model NAME` is the single exception, and it is deliberately narrow: it
+  overrides `OLLAMA_MODEL` only. Which model can run is bounded by the GPU in
+  the machine rather than by preference, and "does this fit my card" is a
+  question you answer by trying it, not by editing a header and rebuilding.
+  `OLLAMA_MODEL` remains the default and `OLLAMA_MODEL_SMALL` the tested
+  fallback. Do not grow this into a general flag surface -- a second tunable
+  reachable from argv is a design change, so ask first.
   The one exception is `src/config.local.h`, which is untracked and holds
   `NTFY_TOPIC` and `GIST_ID` — still compile-time macros, still no parsing.
   `config.h` includes it if it exists and `#ifndef`-guards its own copies, so a

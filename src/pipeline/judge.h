@@ -23,6 +23,17 @@ int judge_init(void);
  * Issues in a dropped batch keep llm_score = -1 and are discarded by the caller.
  * Returns 0 when at least one batch succeeded, negative when all failed.
  */
+/*
+ * Overrides the Ollama model for this process. Pass NULL or "" to keep
+ * OLLAMA_MODEL. Call before judge_init(), which logs what was selected.
+ *
+ * The one runtime override in the program, and it earns the exception: which
+ * model runs is bounded by the GPU in the machine, not by taste, and a build
+ * step is the wrong way to ask "does this fit my card". `name` must outlive the
+ * process -- argv does.
+ */
+void judge_set_model(const char *name);
+
 int judge_batch(arena_t *a, issue_t *issues, size_t n);
 
 /*

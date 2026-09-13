@@ -43,6 +43,15 @@ int judge_extract_anthropic_verdicts(arena_t *a, const char *json, size_t json_l
 
 static const char ELISION[] = "\n[...]\n";
 
+/* Points at OLLAMA_MODEL unless --model replaced it; see judge_set_model(). */
+static const char *g_model = OLLAMA_MODEL;
+
+void judge_set_model(const char *name)
+{
+    if (name != NULL && name[0] != '\0')
+        g_model = name;
+}
+
 _Static_assert(LLM_BODY_TRUNC > LLM_BODY_HEAD + (int)sizeof ELISION,
                "LLM_BODY_TRUNC must leave room for LLM_BODY_HEAD plus the elision marker");
 _Static_assert(LLM_BATCH_SIZE > 0, "LLM_BATCH_SIZE must be positive");
@@ -487,7 +496,7 @@ static int ollama_full_batch(arena_t *a, void *pool, issue_t *issues, size_t n,
     prompt = build_batch_prompt(a, issues, n, bodies);
     if (prompt == NULL)
         return -1;
-    if (ollama_post(a, pool, OLLAMA_MODEL, JUDGE_SYSTEM_PROMPT, prompt,
+    if (ollama_post(a, pool, g_model, JUDGE_SYSTEM_PROMPT, prompt,
                     ollama_verdict_schema, n, &resp) < 0)
         return -1;
     if (judge_extract_ollama_verdicts(a, resp.body, resp.body_len, &verdicts, &vlen) < 0)
@@ -1171,7 +1180,7 @@ int judge_init(void)
      * (OLLAMA_KEEP_ALIVE), so a probe here would either wake a cold model for
      * nothing or fail against a server that would have been fine 20 s later.
      */
-    LOGI("judge: local backend, %s via %s", OLLAMA_MODEL, OLLAMA_URL);
+    LOGI("judge: local backend, %s via %s", g_model, OLLAMA_URL);
     return 0;
 #else
     if (env_or_null("ANTHROPIC_API_KEY") == NULL) {
