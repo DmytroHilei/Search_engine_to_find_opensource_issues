@@ -58,31 +58,152 @@ _Static_assert(LLM_BATCH_SIZE > 0, "LLM_BATCH_SIZE must be positive");
 _Static_assert(LLM_WHY_MAX > 0, "LLM_WHY_MAX must be positive");
 
 /*
- * The payment paragraph is not padding. Labels are already in every prompt, and
- * a 4B judge still scored two issues carrying no labels at all as bounties --
- * both reached a real board, one of them ranked above a genuine $8,000 one.
- * Money is the field the user acts on, so an invented one costs an evening.
- * State the asymmetry explicitly: the model must under-claim, not guess.
+ * Every line here was measured by rescoring the same 60 real issues off a live
+ * board, qwen3:8b at batch 4. Change it the same way, not by reading it.
+ *
+ * The shape of the rubric is what was bought. "8-10: concrete, reproducible,
+ * actionable right now" describes a good issue, and describing does not
+ * separate: it is true of nearly every open bug in these repos, so the judge
+ * kept 40 of the 60 and put 14 of them in the 9-10 band -- a band reserved for
+ * money, on a set containing no paid issue at all. Naming what must be PRESENT
+ * IN THE PAYLOAD separates. With the three criteria, the prior that ordinary is
+ * 4-5, and payment moved out of the model's hands, the same 60 issues come back
+ * 27 kept, 8 at the top of the unpaid range, none above it, and zero reasons
+ * claiming a bounty that does not exist (it was 14 of 60).
+ *
+ * Two things that look like improvements and are not, both tried here:
+ *
+ *   - Naming the criteria (REPRODUCER / LOCATION / ROUTE) so the model could
+ *     cite them. It answered "REPRODUCER, LOCATION, ROUTE" for 59 of 60 rows.
+ *     A name in this prompt is a phrase to echo, which is also why step 1 no
+ *     longer calls its band "a cash bounty".
+ *   - "Set keep=false only for the 0-2 band", to stop ~19 of 60 being zeroed.
+ *     keep=false went to 57 of 60. Making the flag more salient made the model
+ *     reach for it.
  */
 #define JUDGE_SYSTEM_PROMPT                                                       \
     "You triage GitHub issues for one developer. Answer only through the "        \
     "structured verdict list.\n"                                                  \
     "Developer profile: " USER_PROFILE "\n"                                       \
-    "Score 0-10 for how much this developer wants this issue on their phone now:\n"\
+    "Score 0-10 for how much this developer wants this issue on their phone now, "\
+    "in two steps.\n"                                                             \
+    "STEP 1. Read the `payment:` line of the issue. It was computed from the "    \
+    "title and the labels before you saw it and it is authoritative -- do not "   \
+    "re-derive it from the body, and do not reason that the project runs a "      \
+    "bounty programme or that the work is valuable.\n"                            \
+    "  payment: YES ..... score 10, and you are done.\n"                          \
+    "  payment: none .... go to step 2, and do not use the words paid or "        \
+    "bounty about this issue at all.\n"                                           \
+    "STEP 2. Unpaid, so the score is 0-8 and cannot be 9 or 10 however good the " \
+    "work is. Most open issues in these repositories are ordinary bug reports. "  \
+    "Ordinary is 4-5, and scoring everything 7 is the failure here: the score "   \
+    "has to separate, not approve. Count how many of these three the payload "    \
+    "actually shows -- if you cannot point at the text that shows one, it is "    \
+    "absent:\n"                                                                   \
+    "  - a failing case, command, input, stack trace or measured number, not "    \
+    "merely a description of the symptom;\n"                                      \
+    "  - the name of the file, kernel, function, flag or API it lives in;\n"      \
+    "  - a stated cause, a proposed fix, or a design the maintainers accepted.\n" \
     "  0-2  noise: bots, dependency bumps, typos, docs, other platforms\n"        \
-    "  3-5  on-topic project, but not this developer's kind of work\n"            \
-    "  6-7  relevant, worth opening\n"                                            \
-    "  8-10 strong match: concrete, reproducible, actionable right now\n"          \
+    "  3-5  on-topic project, ordinary report: it shows none or one of them\n"    \
+    "  6-7  two of them, in this developer's areas\n"                             \
+    "  8    all three, in this developer's areas\n"                               \
+    "Between two defensible scores in step 2, give the lower one.\n"              \
     "Set keep=false for anything you would not push to them at all.\n"            \
-    "Payment is a fact you must read, never infer. An issue is paid ONLY if the "  \
-    "title or the labels say so -- an amount, or a label such as `bounty`. If "    \
-    "neither does, it is unpaid: judge it on reputation or interest, and do not " \
-    "call it a bounty. Writing `bounty` about an issue with no bounty is the "     \
-    "worst error you can make here, worse than scoring it too low.\n"              \
-    "`why` is one clause of at most 12 words saying what makes it (ir)relevant -- "\
-    "it is the notification body, so no markdown and no preamble. State only "     \
-    "what the payload shows.\n"                                                    \
+    "`why` is required either way, including for a paid issue: say what the "     \
+    "work is, never that it is paid -- the board already shows that.\n"           \
+    "`why` is the notification body: one clause, at most 12 words, no markdown, "  \
+    "no preamble, no field names and no labelled list. Write what a colleague "    \
+    "would say in passing -- \"fp32 pow returns +inf for |exp|>16\", \"no "        \
+    "reproducer, symptom only\". Never restate the criteria above as your "        \
+    "answer. State only what the payload shows.\n"                                 \
     "Return exactly one verdict per listed index, using the 0-based index given."
+
+/*
+ * Whether an issue is paid is a substring search, and the model is bad at it in
+ * both directions. Rescoring one real board, an 8B judge put pytorch#59515 --
+ * labels "module: cuda", "triaged", no money anywhere -- at 9 for an "unclaimed,
+ * unassigned cash bounty" it invented, while reading "[Bounty] Outline of NVIDIA
+ * e2e full FP16 matmul" as unpaid and scoring a genuine tinygrad bounty 8. One
+ * of those costs an evening and the other is the failure this program exists to
+ * prevent, so the answer is computed here, passed into the prompt, and enforced
+ * on the way back out.
+ *
+ * The band edges belong next to the prompt that defines them, not in config.h:
+ * changing either one without changing JUDGE_SYSTEM_PROMPT's step 1 and step 2
+ * produces a rubric that contradicts itself.
+ */
+#define JUDGE_UNPAID_CAP  8    /* top of step 2 -- unpaid cannot outrank money */
+#define JUDGE_PAID_FLOOR  9    /* step 1 says 10; 9 leaves room to disagree     */
+
+/* Case-insensitive substring, ASCII. needle is a literal, never user input. */
+static int ci_contains(const char *hay, const char *needle)
+{
+    size_t nlen = strlen(needle);
+
+    if (hay == NULL)
+        return 0;
+    for (; *hay != '\0'; hay++) {
+        if (ascii_strncasecmp(hay, needle, nlen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * A currency symbol against an actual figure: "$500", "$ 2,000". The digit is
+ * the whole point -- a bare '$' matches "$HOME expansion in the build script"
+ * and "PS1 $ prompt", and this predicate now sets a score floor, so a false
+ * positive puts a shell-quoting bug at the top of the board.
+ */
+static int has_amount(const char *s)
+{
+    size_t i;
+
+    if (s == NULL)
+        return 0;
+    for (i = 0; s[i] != '\0'; i++) {
+        size_t j = i + 1;
+
+        if (s[i] != '$')
+            continue;
+        while (s[j] == ' ')
+            j++;
+        if (s[j] >= '0' && s[j] <= '9')
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * The same evidence JUDGE_SYSTEM_PROMPT tells the model to read: title and
+ * labels only, never the body -- a body is full of people saying they would pay
+ * for a fix.
+ *
+ * The word list is short on purpose. "reward" and "grant" are absent for the
+ * reason config.h gives about the keyword table: in these repos they mean reward
+ * functions and permission grants far more often than money. "usd" and "eur" are
+ * absent because as bare substrings they fire on ordinary words -- "eur" is
+ * inside "neural" and "heuristic", which is most of this corpus.
+ */
+static int payload_shows_payment(const issue_t *is)
+{
+    static const char *const WORD[] = { "bounty", "prize", "stipend", "gsoc" };
+    size_t w;
+    int i;
+
+    if (has_amount(is->title))
+        return 1;
+    for (w = 0; w < sizeof WORD / sizeof WORD[0]; w++) {
+        if (ci_contains(is->title, WORD[w]))
+            return 1;
+        for (i = 0; i < is->n_labels; i++) {
+            if (ci_contains(is->labels[i], WORD[w]) || has_amount(is->labels[i]))
+                return 1;
+        }
+    }
+    return 0;
+}
 
 #define SCREEN_SYSTEM_PROMPT                                                      \
     "You are a cheap first-pass filter over GitHub issues.\n"                     \
@@ -100,18 +221,10 @@ static int is_utf8_cont(unsigned char c)
 }
 
 /*
- * Largest cut <= max that does not land inside a multi-byte sequence. A lone
- * continuation byte is invalid UTF-8 and yyjson refuses to encode it, which
- * would take down the whole request rather than mangle one body.
+ * Smallest offset >= start that begins a codepoint. The other direction lives
+ * in core/util.c as utf8_trunc_len(); only the tail needs this one, because the
+ * head goes through text_trunc_clean().
  */
-static size_t utf8_floor(const char *s, size_t max)
-{
-    while (max > 0 && is_utf8_cont((unsigned char)s[max]))
-        max--;
-    return max;
-}
-
-/* Smallest offset >= start that begins a codepoint. */
 static size_t utf8_ceil(const char *s, size_t len, size_t start)
 {
     while (start < len && is_utf8_cont((unsigned char)s[start]))
@@ -180,7 +293,9 @@ const char *judge_truncate_body(arena_t *a, const char *body)
     if (a == NULL)
         return body;
 
-    head       = utf8_floor(body, (size_t)LLM_BODY_HEAD);
+    /* The head ends at an elision marker, so stopping it mid-sentence hands the
+     * model a fragment to reason from. Back it up to the last full sentence. */
+    head       = text_trunc_clean(body, len, (size_t)LLM_BODY_HEAD);
     keep_tail  = (size_t)LLM_BODY_TRUNC - (size_t)LLM_BODY_HEAD - mark_len;
     tail_start = utf8_ceil(body, len, len - keep_tail);
 
@@ -255,7 +370,15 @@ static const char *build_batch_prompt(arena_t *a, const issue_t *issues, size_t 
                           issues[i].labels[k] != NULL ? issues[i].labels[k] : "");
             sb_puts(&sb, "\n");
         }
-        sb_printf(&sb, "comments: %d\nbody:\n%s\n", issues[i].comments, bodies[i]);
+        /* Step 1 of the rubric is a substring search, so it is answered here
+         * rather than asked. Left to the model it is unreliable in exactly the
+         * cases that matter: an 8B judge read "[Bounty] Outline of ..." as
+         * unpaid and scored the real tinygrad bounty 8, while inventing a
+         * bounty programme for three tt-metal issues that had none. */
+        sb_printf(&sb, "payment: %s\ncomments: %d\nbody:\n%s\n",
+                  payload_shows_payment(&issues[i]) ? "YES -- title or labels name money"
+                                                    : "none in title or labels",
+                  issues[i].comments, bodies[i]);
     }
 
     if (sb.overflow) {
@@ -1070,11 +1193,40 @@ int judge_parse_verdicts(arena_t *a, const char *json, size_t json_len,
         if (!keep)
             score = 0;                     /* below LLM_SCORE_MIN: dropped */
 
+        /*
+         * Both directions are enforced, because the model gets both wrong and
+         * the two errors are not symmetric in cost. An invented bounty puts a
+         * lie at the top of the board; a missed one is a paid, unassigned issue
+         * the user never hears about, which is the whole reason this runs.
+         *
+         * The floor overrides keep=false deliberately. A model that answered
+         * keep=false with "payment: YES" as its reason has contradicted the
+         * payload, not made a judgement, and that is a verdict observed live.
+         */
+        if (payload_shows_payment(&issues[idx])) {
+            if (score < JUDGE_PAID_FLOOR) {
+                LOGW("judge: %s#%d is paid per its title or labels but scored "
+                     "%lld -- raised to %d (model said: %s)", issues[idx].repo,
+                     issues[idx].number, score, JUDGE_PAID_FLOOR,
+                     yyjson_is_str(vw) ? yyjson_get_str(vw) : "(no reason)");
+                score = JUDGE_PAID_FLOOR;
+            }
+        } else if (score > JUDGE_UNPAID_CAP) {
+            LOGW("judge: %s#%d scored %lld with no payment in title or labels -- "
+                 "capped at %d (model said: %s)", issues[idx].repo, issues[idx].number,
+                 score, JUDGE_UNPAID_CAP,
+                 yyjson_is_str(vw) ? yyjson_get_str(vw) : "(no reason)");
+            score = JUDGE_UNPAID_CAP;
+        }
+
         if (yyjson_is_str(vw)) {
             size_t wlen = yyjson_get_len(vw);
 
-            if (wlen > (size_t)LLM_WHY_MAX)
-                wlen = utf8_floor(yyjson_get_str(vw), (size_t)LLM_WHY_MAX);
+            /* The prompt asks for 12 words and the model overshoots often:
+             * 40 of 60 rows on a real board sat at exactly LLM_WHY_MAX, every
+             * one of them cut mid-word. This is the notification body, so it
+             * stops at the last full sentence or word instead. */
+            wlen = text_trunc_clean(yyjson_get_str(vw), wlen, (size_t)LLM_WHY_MAX);
             /* Arena copy: the doc dies at the bottom of this function, so a
              * borrowed pointer would be a dangling read from notify.c. */
             why = arena_strndup(a, yyjson_get_str(vw), wlen);

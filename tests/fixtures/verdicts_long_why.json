@@ -1,0 +1,6 @@
+[
+  {"i": 0, "keep": true, "score": 7,
+   "why": "ggml_compute_forward_mul_mat returns wrong results for non-contiguous src1. A failing case is attached. The maintainer has already agreed to the proposed"},
+  {"i": 1, "keep": true, "score": 7,
+   "why": "silent instant-EOS beyond the fourth layer on the hybrid path with speculative decoding enabled and no warning emitted anywhere"}
+]

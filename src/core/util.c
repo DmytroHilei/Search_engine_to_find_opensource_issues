@@ -138,6 +138,95 @@ size_t ascii_sanitize(char *dst, size_t dstlen, const char *src)
     return w;
 }
 
+size_t utf8_trunc_len(const char *s, size_t len, size_t max)
+{
+    size_t cut, back, seq;
+    unsigned char lead;
+
+    if (s == NULL || len <= max)
+        return s == NULL ? 0 : len;
+
+    /*
+     * s[max] is the first byte being dropped. If it is a continuation byte
+     * (10xxxxxx) it belongs to a character that starts before the cut, so walk
+     * back to that character's lead byte. A valid sequence is at most 4 bytes.
+     */
+    cut = max;
+    for (back = 0; back < 3 && cut > 0 && ((unsigned char)s[cut] & 0xC0) == 0x80; back++)
+        cut--;
+
+    if (cut == max)
+        return max;                     /* already on a boundary */
+    if (((unsigned char)s[cut] & 0xC0) == 0x80)
+        return max;                     /* not UTF-8 at all -- cut flat */
+
+    lead = (unsigned char)s[cut];
+    if (lead < 0x80)
+        seq = 1;
+    else if ((lead & 0xE0) == 0xC0)
+        seq = 2;
+    else if ((lead & 0xF0) == 0xE0)
+        seq = 3;
+    else if ((lead & 0xF8) == 0xF0)
+        seq = 4;
+    else
+        return cut;                     /* invalid lead byte -- drop it */
+
+    /* Keep the character only when all of it fits below the cap. */
+    return cut + seq <= max ? cut + seq : cut;
+}
+
+static int is_space_byte(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+/*
+ * True when s[i] ends a sentence rather than sitting inside a token. Requiring
+ * whitespace (or end of input) after the mark is the whole test, and it is
+ * enough for both false positives this corpus actually produces: "CUDA 12.4"
+ * and "conv_config.activation" are each followed by a non-space.
+ *
+ * What must NOT be added is a check on the byte before the mark. An earlier
+ * version rejected a dot preceded by a digit, to catch a trailing "12.", and it
+ * silently broke the common case instead -- "wrong results for src1." and
+ * "fails on sm_90." are ordinary sentence ends, and identifiers here end in a
+ * digit constantly.
+ */
+static int is_sentence_end(const char *s, size_t len, size_t i)
+{
+    if (s[i] != '.' && s[i] != '!' && s[i] != '?')
+        return 0;
+    return i + 1 >= len || is_space_byte(s[i + 1]);
+}
+
+size_t text_trunc_clean(const char *s, size_t len, size_t max)
+{
+    size_t cut, floor, i;
+
+    if (s == NULL)
+        return 0;
+    if (len <= max)
+        return len;
+
+    cut = utf8_trunc_len(s, len, max);
+    /* Below this a "cleaner" cut costs more text than the ragged edge does. */
+    floor = max / 2;
+
+    for (i = cut; i > floor; i--) {
+        if (is_sentence_end(s, len, i - 1))
+            return i;
+    }
+    for (i = cut; i > floor; i--) {
+        if (is_space_byte(s[i - 1])) {
+            while (i > 0 && is_space_byte(s[i - 1]))
+                i--;
+            return i;
+        }
+    }
+    return cut;
+}
+
 const char *env_or_null(const char *name)
 {
     const char *v = getenv(name);

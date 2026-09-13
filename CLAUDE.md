@@ -148,12 +148,30 @@ cast or a `(void)x` unless the variable is genuinely unused by design.
 12. **Truncate on a UTF-8 boundary, never on a byte.** Board fields are fixed
     arrays and GitHub titles are full of emoji and CJK. A clipped code point is
     invalid UTF-8, yyjson refuses to encode it, and the whole cycle publishes
-    nothing. `utf8_trunc_len()` exists for this. `render.c` drops malformed
-    sequences as a backstop -- do not treat that as permission to emit them.
+    nothing. `utf8_trunc_len()` in `core/util.h` exists for this, and
+    `text_trunc_clean()` beside it does the same job for prose that a person
+    reads -- it backs up to the last sentence or word so a notification body
+    does not stop mid-token. `render.c` drops malformed sequences as a backstop
+    -- do not treat that as permission to emit them.
 13. **A failed publish must not advance the watermark.** The gist is the
     cycle's primary output now, so rule 4 covers it exactly as it covers
     notification. A render that overflows is a failure, not a short board: a
     truncated board reads as "this is everything open".
+14. **Whether an issue is paid is decided in C, not by the model.**
+    `payload_shows_payment()` reads the title and labels, the answer goes into
+    the prompt as the `payment:` line, and `judge_parse_verdicts()` enforces it
+    on the way back: unpaid is capped at `JUDGE_UNPAID_CAP`, paid is floored at
+    `JUDGE_PAID_FLOOR` even against `keep=false`. Both directions are load-
+    bearing and both were observed live -- an 8B judge invented a bounty for an
+    issue labelled only "module: cuda", and scored tinygrad #3039 zero while its
+    own reason read "$500 bounty for parallel scan". Do not relax either one
+    into a prompt instruction; that is where they started.
+15. **Re-measure the judge prompt, never just read it.** The rubric in
+    `JUDGE_SYSTEM_PROMPT` is tuned against a rescore of ~60 real issues at
+    `LLM_BATCH_SIZE`, and edits that read as clarifications have twice collapsed
+    it -- naming the criteria made the model echo the names for 59 of 60 rows,
+    and one sentence about `keep=false` took rejections from 19 of 60 to 57 of
+    60. The comment above the macro lists what was tried.
 
 ## Style
 

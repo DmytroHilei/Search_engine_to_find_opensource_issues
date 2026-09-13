@@ -101,17 +101,19 @@ static const char *const REPOS[] = { WATCHED_REPOS };
 #define USER_PROFILE \
     "C/C++ and CUDA developer: HPC, GPU kernels, compilers, systems. "        \
     "Rank candidates by, in order of weight:\n"                              \
-    "(1) PAID. An explicit cash bounty, prize, grant or stipend. Score 9-10 " \
-    "if the bounty is unclaimed and unassigned; a claimed bounty is worth "   \
-    "little because a pull request only counts when you hold the "           \
-    "assignment.\n"                                                          \
+    "(1) PAID. An explicit cash bounty, prize, grant or stipend, and nobody "  \
+    "holding it yet -- a pull request only counts when you hold the "         \
+    "assignment, so a claimed bounty is worth little. Outranks everything "   \
+    "below it; the `payment:` line of each issue settles whether it applies.\n" \
     "(2) REPUTATION. Unpaid work in a high-visibility project where landing " \
     "a patch is durable credibility: kernel or compiler internals, a "        \
     "correctness fix with a regression test, a measurable performance win. "  \
-    "Score 6-8 even with no money attached.\n"                               \
+    "Worth 6-8 with no money attached, but earn it on the three marks -- "    \
+    "a high-visibility repository is not by itself a reason to score high.\n" \
     "(3) INTEREST. Genuinely novel or difficult problems -- unusual "         \
     "hardware, emulators, numerical analysis, allocator and memory-model "    \
-    "work -- that are worth doing for their own sake. Score 6-7.\n"           \
+    "work -- that are worth doing for their own sake. Worth 6-7, same "       \
+    "condition.\n"                                                           \
     "Strong topical signals: numerical correctness (fp32/fp16 accuracy, "     \
     "overflow, NaN, rounding, INT_MIN edge cases), kernel and matmul "        \
     "optimisation, tensor cores, memory/allocator bugs, race conditions, "    \

@@ -86,51 +86,6 @@ static void str_copy(char *dst, size_t dstlen, const char *src)
 }
 
 /*
- * Length to keep when cutting `s` to at most `max` bytes, moved back to a UTF-8
- * character boundary so the tail is never a half-written codepoint. A split
- * sequence would be re-serialised into the LLM request JSON later and yyjson
- * would reject the whole batch over one invalid continuation byte.
- */
-static size_t utf8_trunc_len(const char *s, size_t len, size_t max)
-{
-    size_t cut, back, seq;
-    unsigned char lead;
-
-    if (len <= max)
-        return len;
-
-    /*
-     * s[max] is the first byte we are dropping. If it is a continuation byte
-     * (10xxxxxx) it belongs to a character that starts before the cut, so walk
-     * back to that character's lead byte. A valid sequence is at most 4 bytes,
-     * hence at most 3 steps.
-     */
-    cut = max;
-    for (back = 0; back < 3 && cut > 0 && ((unsigned char)s[cut] & 0xC0) == 0x80; back++)
-        cut--;
-
-    if (cut == max)
-        return max;                     /* already on a boundary */
-    if (((unsigned char)s[cut] & 0xC0) == 0x80)
-        return max;                     /* not UTF-8 at all -- cut flat */
-
-    lead = (unsigned char)s[cut];
-    if (lead < 0x80)
-        seq = 1;
-    else if ((lead & 0xE0) == 0xC0)
-        seq = 2;
-    else if ((lead & 0xF0) == 0xE0)
-        seq = 3;
-    else if ((lead & 0xF8) == 0xF0)
-        seq = 4;
-    else
-        return cut;                     /* invalid lead byte -- drop it */
-
-    /* Keep the character only when all of it fits below the cap. */
-    return cut + seq <= max ? cut + seq : cut;
-}
-
-/*
  * str_copy() for text that may be multi-byte. A GitHub title routinely exceeds
  * board_entry_t::title, and a flat cut lands mid-sequence often enough to be a
  * certainty rather than a risk: the clipped codepoint reaches gist.c, yyjson

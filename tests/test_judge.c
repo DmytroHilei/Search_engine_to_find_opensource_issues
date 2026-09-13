@@ -165,6 +165,148 @@ static void test_why_is_copied(void)
  * two beyond the batch size are dropped. Before this, a model that shifted its
  * own indices silently attached each verdict to the wrong issue.
  */
+/*
+ * The prompt asks for 12 words and the model overshoots: on one real board 40
+ * of 60 rows sat at exactly LLM_WHY_MAX, every one cut mid-word. `why` is the
+ * notification body, so it stops at a sentence when there is one and at a word
+ * otherwise -- and in neither case with a dangling space.
+ */
+static void test_why_stops_on_a_boundary(void)
+{
+    issue_t is[2];
+    char *json;
+    size_t len, w0, w1;
+
+    json = fixture_read("tests/fixtures/verdicts_long_why.json", &len);
+    issues_reset(is, 2);
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 2), 2);
+    free(json);
+
+    w0 = strlen(is[0].why);
+    w1 = strlen(is[1].why);
+
+    CHECK(w0 <= (size_t)LLM_WHY_MAX);
+    CHECK(w1 <= (size_t)LLM_WHY_MAX);
+    /*
+     * One sentence ends below the cap, at byte 75, and it ends on "src1." --
+     * an identifier ending in a digit, which a boundary rule keyed on the byte
+     * before the mark would refuse to see. The second sentence ends at 103 and
+     * is past the cap, so it goes entirely rather than half.
+     */
+    CHECK_EQ(w0, 75u);
+    CHECK_EQ(is[0].why[w0 - 1], '.');
+    CHECK(strstr(is[0].why, "non-contiguous src1.") != NULL);
+    CHECK(strstr(is[0].why, "failing case") == NULL);
+    /* No terminator anywhere, so it falls back to the last whole word. */
+    CHECK(w1 > (size_t)LLM_WHY_MAX / 2);
+    CHECK(is[1].why[w1 - 1] != ' ');
+    CHECK_STREQ(is[1].why + w1 - 7, "enabled");
+}
+
+/*
+ * The top band asserts a fact about the payload, so parse checks it. The first
+ * two verdicts are the real failure this exists for: an 8B judge rescoring a
+ * live board put pytorch#59515 at 9 for an "unclaimed, unassigned cash bounty"
+ * it had invented, on an issue whose only labels were "module: cuda" and
+ * "triaged". Both must land at JUDGE_UNPAID_CAP; the two carrying real evidence
+ * must be left alone, one via the title and one via a label.
+ */
+static void test_unpaid_cannot_reach_the_top_band(void)
+{
+    issue_t is[4];
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/verdicts_paid_claim.json", &len);
+    issues_reset(is, 4);
+
+    is[0].title = "Conv1d with large batch size and half precision returns incorrect results";
+    is[0].labels[0] = "module: cuda";
+    is[0].labels[1] = "module: correctness (silent)";
+    is[0].n_labels = 2;
+
+    is[1].title = "Heap buffer overflow via unvalidated n_vocab";   /* no evidence */
+
+    is[2].title = "Rewrite the fp16 reduction path";                /* label carries it */
+    is[2].labels[0] = "bounty";
+    is[2].n_labels = 1;
+
+    is[3].title = "[$500 Bounty] mul_mat is wrong for non-contiguous src1";
+
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 4), 4);
+    free(json);
+
+    CHECK_EQ(is[0].llm_score, 8);        /* 10, invented -> capped */
+    CHECK_EQ(is[1].llm_score, 8);        /*  9, invented -> capped */
+    CHECK_EQ(is[2].llm_score, 9);        /*  9, `bounty` label -- untouched */
+    CHECK_EQ(is[3].llm_score, 9);        /*  8, but "[$500 Bounty]" -> floored */
+}
+
+/*
+ * The other direction, and the one that matters more: a paid issue the model
+ * wanted to discard. Observed live at batch=1, an 8B judge answered keep=false
+ * on a tinygrad bounty with the reason "payment: YES" -- a verdict contradicting
+ * its own stated evidence. keep=false zeroes a score, so without the floor that
+ * issue leaves the pipeline entirely and the user never hears about it.
+ */
+static void test_a_paid_issue_survives_keep_false(void)
+{
+    issue_t is[2];
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/verdicts_ok.json", &len);
+    issues_reset(is, 2);
+    is[1].title = "[Bounty] Outline of NVIDIA e2e full FP16 matmul speed";
+
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 2), 2);
+    free(json);
+
+    CHECK_EQ(is[0].llm_score, 8);        /* unpaid, keep=true, at the cap */
+    CHECK_EQ(is[1].llm_score, 9);        /* keep=false, score 1 -- floored */
+    CHECK(is[1].llm_score >= LLM_SCORE_MIN);
+}
+
+/*
+ * has_amount() sets a floor now, so a bare '$' must not match. Both of these
+ * are ordinary systems-programming titles, and both would have been floored to
+ * the top of the board by a naive substring search for "$".
+ */
+static void test_a_bare_dollar_is_not_an_amount(void)
+{
+    issue_t is[2];
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/verdicts_ok.json", &len);
+    issues_reset(is, 2);
+    is[0].title = "$HOME is not expanded in the generated build script";
+    is[1].title = "PS1 prompt: literal $ breaks the test harness";
+
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 2), 2);
+    free(json);
+
+    CHECK_EQ(is[0].llm_score, 8);        /* not floored */
+    CHECK_EQ(is[1].llm_score, 0);        /* keep=false still wins when unpaid */
+}
+
+/* The cap is a ceiling, not a floor: it must never lift a low score. */
+static void test_the_cap_only_lowers(void)
+{
+    issue_t is[3];
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/verdicts_ok.json", &len);
+    issues_reset(is, 3);
+    CHECK_EQ(judge_parse_verdicts(&g_arena, json, len, is, 3), 3);
+    free(json);
+
+    CHECK_EQ(is[0].llm_score, 8);
+    CHECK_EQ(is[1].llm_score, 0);        /* keep=false still wins */
+    CHECK_EQ(is[2].llm_score, 6);
+}
+
 static void test_parse_ignores_model_index(void)
 {
     issue_t *is = calloc(2, sizeof *is);
@@ -176,6 +318,10 @@ static void test_parse_ignores_model_index(void)
     if (is == NULL)
         return;
     issues_reset(is, 2);
+    /* The fixture scores both 9. Payment evidence keeps the unpaid-score cap
+     * out of a test that is about which issue a verdict lands on. */
+    is[0].title = "[Bounty] verdict index handling";
+    is[1].title = "[Bounty] verdict index handling";
 
     json = fixture_read("tests/fixtures/verdicts_bad.json", &len);
     r = judge_parse_verdicts(&g_arena, json, len, is, 2);
@@ -435,6 +581,11 @@ int main(void)
 #endif
     TEST_RUN(test_parse_ok);
     TEST_RUN(test_why_is_copied);
+    TEST_RUN(test_why_stops_on_a_boundary);
+    TEST_RUN(test_unpaid_cannot_reach_the_top_band);
+    TEST_RUN(test_a_paid_issue_survives_keep_false);
+    TEST_RUN(test_a_bare_dollar_is_not_an_amount);
+    TEST_RUN(test_the_cap_only_lowers);
     TEST_RUN(test_parse_ignores_model_index);
     TEST_RUN(test_parse_malformed);
     TEST_RUN(test_truncate_short);

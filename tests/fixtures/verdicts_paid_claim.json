@@ -1,0 +1,6 @@
+[
+  {"i": 0, "keep": true, "score": 10, "why": "Unclaimed, unassigned cash bounty"},
+  {"i": 1, "keep": true, "score": 9,  "why": "PAID, REPRODUCER, LOCATION"},
+  {"i": 2, "keep": true, "score": 9,  "why": "Bounty on the fp16 reduction path, unassigned"},
+  {"i": 3, "keep": true, "score": 8,  "why": "Failing case in ggml_compute_forward_mul_mat"}
+]
