@@ -1,0 +1,12 @@
+{
+  "model": "qwen3:8b",
+  "created_at": "2026-09-10T08:12:44.913827431Z",
+  "message": {
+    "role": "assistant",
+    "content": "[{\"i\":0,\"keep\":true,\"score\":8,\"why\":\"CUDA kernel perf regression on sm_90, unassigned\"},{\"i\":1,\"keep\":false,\"score\":1,\"why\":\"Dependabot bump, no human content\"},{\"i\":2,\"keep\":true,\"score\":6,\"why\":\"Allocator double free during multi-GPU teardown\"}]"
+  },
+  "done_reason": "stop",
+  "done": true,
+  "total_duration": 8134221873,
+  "load_duration": 1520883412
+}

@@ -42,7 +42,30 @@ int judge_extract_ollama_verdicts(arena_t *a, const char *json, size_t json_len,
 int judge_extract_anthropic_verdicts(arena_t *a, const char *json, size_t json_len,
                                      const char **out, size_t *out_len);
 
+/* Result of judge_ollama_window(). Same visibility, same reason. */
+#define JUDGE_WINDOW_OK        0
+#define JUDGE_WINDOW_NEAR      1   /* fits, but within OLLAMA_CTX_WARN_PCT of the edge */
+#define JUDGE_WINDOW_TRUNCATED 2   /* Ollama cut the prompt; the verdicts are unsafe */
+#define JUDGE_WINDOW_UNKNOWN   3   /* no token counts in the reply to judge by */
+int judge_ollama_window(const char *json, size_t json_len, size_t prompt_bytes,
+                        long *used_tokens);
+
+#if JUDGE_MODE == JUDGE_LOCAL || JUDGE_MODE == JUDGE_HYBRID
+static int ollama_window_gate(const http_resp_t *resp, const char *system,
+                              const char *prompt);
+#endif
+
 static const char ELISION[] = "\n[...]\n";
+
+/*
+ * Context-window tallies for one judge_batch() call, summarised once at its
+ * end. Per batch they would repeat the same line up to 26 times a cycle, which
+ * is how a real warning gets scrolled past. Single-threaded, so file scope is
+ * safe; judge_batch() zeroes them on entry.
+ */
+static int  g_win_truncated;
+static int  g_win_near;
+static long g_win_peak;
 
 /* Points at OLLAMA_MODEL unless --model replaced it; see judge_set_model(). */
 static const char *g_model = OLLAMA_MODEL;
@@ -746,6 +769,8 @@ static int ollama_full_batch(arena_t *a, void *pool, issue_t *issues, size_t n,
     if (ollama_post(a, pool, g_model, g_judge_prompt, prompt,
                     ollama_verdict_schema, n, &resp) < 0)
         return -1;
+    if (ollama_window_gate(&resp, g_judge_prompt, prompt) < 0)
+        return -1;
     if (judge_extract_ollama_verdicts(a, resp.body, resp.body_len, &verdicts, &vlen) < 0)
         return -1;
 
@@ -839,6 +864,8 @@ static int ollama_screen(arena_t *a, void *pool, issue_t *issues, size_t n,
         return -1;
     if (ollama_post(a, pool, OLLAMA_SCREEN_MODEL, g_screen_prompt, prompt,
                     screen_schema, n, &resp) < 0)
+        return -1;
+    if (ollama_window_gate(&resp, g_screen_prompt, prompt) < 0)
         return -1;
     if (judge_extract_ollama_verdicts(a, resp.body, resp.body_len, &verdicts, &vlen) < 0)
         return -1;
@@ -1080,6 +1107,83 @@ static int hybrid_batch(arena_t *a, void *pool, issue_t *issues, size_t n,
 #endif /* HYBRID */
 
 /* ------------------------------------------------------- envelope extraction */
+
+/*
+ * Classifies one Ollama reply against OLLAMA_NUM_CTX. `prompt_bytes` is the
+ * system prompt plus the user prompt as sent; `used_tokens`, when non-NULL,
+ * receives prompt_eval_count + eval_count.
+ *
+ * Truncation is detected by ratio, not count, because the count is taken after
+ * the cut -- see OLLAMA_TRUNC_BYTES_PER_TOKEN for the measurements. Missing or
+ * zero counts are UNKNOWN, never TRUNCATED: an Ollama that stops reporting them
+ * must not make every batch look cut and silently empty the board.
+ */
+int judge_ollama_window(const char *json, size_t json_len, size_t prompt_bytes,
+                        long *used_tokens)
+{
+    yyjson_doc *doc;
+    yyjson_val *root, *pv, *ev;
+    long prompt_tok = 0, out_tok = 0;
+    int rc = JUDGE_WINDOW_UNKNOWN;
+
+    if (used_tokens != NULL)
+        *used_tokens = 0;
+    if (json == NULL)
+        return JUDGE_WINDOW_UNKNOWN;
+
+    doc = yyjson_read(json, json_len, 0);
+    if (doc == NULL)
+        return JUDGE_WINDOW_UNKNOWN;
+    root = yyjson_doc_get_root(doc);
+    pv = yyjson_obj_get(root, "prompt_eval_count");
+    ev = yyjson_obj_get(root, "eval_count");
+    if (yyjson_is_int(pv))
+        prompt_tok = (long)yyjson_get_sint(pv);
+    if (yyjson_is_int(ev))
+        out_tok = (long)yyjson_get_sint(ev);
+    yyjson_doc_free(doc);
+
+    if (prompt_tok <= 0)
+        return JUDGE_WINDOW_UNKNOWN;
+    if (out_tok < 0)
+        out_tok = 0;
+    if (used_tokens != NULL)
+        *used_tokens = prompt_tok + out_tok;
+
+    if (prompt_bytes > (size_t)prompt_tok * (size_t)OLLAMA_TRUNC_BYTES_PER_TOKEN)
+        rc = JUDGE_WINDOW_TRUNCATED;
+    else if ((prompt_tok + out_tok) * 100 > (long)OLLAMA_NUM_CTX * OLLAMA_CTX_WARN_PCT)
+        rc = JUDGE_WINDOW_NEAR;
+    else
+        rc = JUDGE_WINDOW_OK;
+    return rc;
+}
+
+#if JUDGE_MODE == JUDGE_LOCAL || JUDGE_MODE == JUDGE_HYBRID
+/*
+ * Runs judge_ollama_window() on a reply and folds the result into the cycle's
+ * tallies. Returns -1 when the batch must be dropped.
+ */
+static int ollama_window_gate(const http_resp_t *resp, const char *system,
+                              const char *prompt)
+{
+    size_t bytes = strlen(system) + strlen(prompt);
+    long used;
+    int w = judge_ollama_window(resp->body, resp->body_len, bytes, &used);
+
+    if (used > g_win_peak)
+        g_win_peak = used;
+    if (w == JUDGE_WINDOW_TRUNCATED) {
+        g_win_truncated++;
+        LOGD("judge: %zu prompt bytes came back as only %ld tokens -- truncated",
+             bytes, used);
+        return -1;
+    }
+    if (w == JUDGE_WINDOW_NEAR)
+        g_win_near++;
+    return 0;
+}
+#endif
 
 int judge_extract_ollama_verdicts(arena_t *a, const char *json, size_t json_len,
                                   const char **out, size_t *out_len)
@@ -1527,6 +1631,10 @@ int judge_batch(arena_t *a, issue_t *issues, size_t n)
     if (bodies == NULL)
         return -1;
 
+    g_win_truncated = 0;
+    g_win_near = 0;
+    g_win_peak = 0;
+
     /* One request per LLM_BATCH_SIZE issues: 8x fewer round trips, and the
      * model gets to compare the candidates against each other. */
     for (off = 0; off < n; off += (size_t)LLM_BATCH_SIZE) {
@@ -1554,5 +1662,25 @@ int judge_batch(arena_t *a, issue_t *issues, size_t n)
     }
 
     LOGI("judge: %zu issues, %d batches judged, %d dropped", n, ok, dropped);
+
+    /*
+     * The cause is almost always the same: a longer `profile` in the user's
+     * config, or LLM_BATCH_SIZE raised without OLLAMA_NUM_CTX. Both are named,
+     * because the one who hits this edited one of them and should not have to
+     * read judge.c to find out which knobs are involved.
+     */
+    if (g_win_truncated > 0)
+        LOGE("judge: %d batch(es) DROPPED -- the prompt overflowed OLLAMA_NUM_CTX "
+             "(%d) and Ollama silently cut it, which makes the model score issues "
+             "it cannot see. Shorten `profile` in your config, or lower "
+             "LLM_BATCH_SIZE / raise OLLAMA_NUM_CTX in src/config.h",
+             g_win_truncated, OLLAMA_NUM_CTX);
+    else if (g_win_near > 0)
+        LOGW("judge: %d batch(es) used over %d%% of OLLAMA_NUM_CTX (peak %ld of %d "
+             "tokens). A slightly longer profile or body will start truncating "
+             "prompts, and the verdicts go wrong without an error",
+             g_win_near, OLLAMA_CTX_WARN_PCT, g_win_peak, OLLAMA_NUM_CTX);
+    else if (g_win_peak > 0)
+        LOGD("judge: context peak %ld of %d tokens", g_win_peak, OLLAMA_NUM_CTX);
     return ok > 0 ? 0 : -1;
 }

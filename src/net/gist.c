@@ -132,8 +132,8 @@ int gist_init(const char *gist_id)
     if (gist_id_is_placeholder() || g_gist_id[0] == '\0') {
         LOGE("gist: no gist id set. Create the gist once with "
              "`gh gist create -d issuewatch /tmp/" GIST_FILENAME "` (seeded under "
-             "that name, which is the file the publish replaces), put the hex id "
-             "from its URL in src/config.h and rebuild. GH_TOKEN must be a "
+             "that name, which is the file the publish replaces), and put the hex "
+             "id from its URL in your config file as `gist-id`. GH_TOKEN must be a "
              "classic token with the `gist` scope -- a fine-grained PAT cannot "
              "write gists.");
         return -1;

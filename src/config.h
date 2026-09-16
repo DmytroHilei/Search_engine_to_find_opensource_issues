@@ -256,7 +256,30 @@ static const kw_t KEYWORDS[] = {
  * issue 0, where 4096 graded them 9/8/7/6. Bigger is not better here.
  */
 #define OLLAMA_NUM_CTX         4096
-#define ANTHROPIC_URL          "https://api.anthropic.com/v1/messages"
+/*
+ * Two checks on every Ollama reply, because overflowing OLLAMA_NUM_CTX does not
+ * fail -- Ollama quietly cuts the prompt to half the window and keeps the TAIL,
+ * so the system prompt and the first issues are what go. Measured: a batch of 8
+ * at 4096 sent ~4.5K tokens, the log read `truncating input prompt prompt=4545
+ * new=2050`, and 17 of 26 verdicts that named an identifier described another
+ * issue in the batch. The reply looks perfectly normal.
+ *
+ * Ollama reports prompt_eval_count AFTER the cut, so the token count alone
+ * cannot tell. Bytes sent per token counted can: 3.32-3.69 across fifteen real
+ * batches of 4, 7.44-7.60 for the truncated eights, and since the cut is always
+ * to half the window a truncated prompt shows about double its natural ratio
+ * however little it overflowed by. 5 sits between with room on both sides.
+ * Prefix caching does not muddy it -- a repeated request counted 2895 tokens
+ * both times.
+ *
+ * A truncated batch is dropped: its verdicts are confidently misattributed,
+ * which is worse on the board than no verdict at all. The warning percentage
+ * counts the reply too, since generated tokens need room in the same window;
+ * real batches of 4 peak around 74% (2911 prompt + ~120 out).
+ */
+#define OLLAMA_TRUNC_BYTES_PER_TOKEN  5
+#define OLLAMA_CTX_WARN_PCT           85
+#define ANTHROPIC_URL         "https://api.anthropic.com/v1/messages"
 #define ANTHROPIC_VERSION      "2023-06-01"
 #define ANTHROPIC_MODEL        "claude-haiku-4-5-20251001"
 
@@ -396,7 +419,7 @@ static const kw_t KEYWORDS[] = {
  * for after the delta fetch has taken its share.
  */
 #define GH_BACKFILL_PAGES      10
-#define GH_BACKFILL_REPOS      1     /* repos swept per cycle */
+#define GH_BACKFILL_REPOS      2     /* repos swept per cycle */
 /*
  * Last page `page=` can address. GitHub serves offset pagination only to 10000
  * items and answers 422 past it -- "please use cursor based pagination" -- so

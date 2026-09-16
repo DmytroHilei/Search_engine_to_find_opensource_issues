@@ -25,6 +25,14 @@ extern int judge_extract_ollama_verdicts(arena_t *a, const char *json, size_t js
 extern int judge_extract_anthropic_verdicts(arena_t *a, const char *json, size_t json_len,
                                             const char **out, size_t *out_len);
 
+/* Mirrors the result codes in judge.c; also header-less by design. */
+#define JUDGE_WINDOW_OK        0
+#define JUDGE_WINDOW_NEAR      1
+#define JUDGE_WINDOW_TRUNCATED 2
+#define JUDGE_WINDOW_UNKNOWN   3
+extern int judge_ollama_window(const char *json, size_t json_len, size_t prompt_bytes,
+                               long *used_tokens);
+
 /* Only built for the Ollama-backed modes; the API path constrains output with a
  * forced tool call instead of a grammar. */
 #if JUDGE_MODE == JUDGE_LOCAL || JUDGE_MODE == JUDGE_HYBRID
@@ -607,6 +615,75 @@ static void test_apply_compacts_and_sorts(void)
 }
 
 /* Ollama double-encodes: message.content is a STRING holding the array. */
+/*
+ * Overflowing OLLAMA_NUM_CTX does not fail: Ollama cuts the prompt to half the
+ * window, keeps the tail, and reports the token count AFTER the cut. Measured at
+ * batch 8 / num_ctx 4096 -- `prompt=4545 new=2050` for a 15249-byte prompt --
+ * and 17 of 26 identifiable verdicts then described another issue in the batch.
+ * The ratio of bytes sent to tokens counted is the tell: 3.32-3.69 across
+ * fifteen real batches of 4, 7.44-7.60 when truncated.
+ */
+static void test_window_detects_truncation(void)
+{
+    char *json;
+    size_t len;
+    long used = -1;
+
+    json = fixture_read("tests/fixtures/ollama_reply_truncated.json", &len);
+    CHECK_EQ(judge_ollama_window(json, len, 15249, &used), JUDGE_WINDOW_TRUNCATED);
+    CHECK_EQ(used, 2050 + 110);
+    free(json);
+}
+
+/* The real batches of 4 at both ends of their measured range must pass. */
+static void test_window_passes_real_batches(void)
+{
+    char *json;
+    size_t len;
+
+    json = fixture_read("tests/fixtures/ollama_reply.json", &len);   /* 1412 tokens */
+    CHECK_EQ(judge_ollama_window(json, len, 1412 * 332 / 100, NULL), JUDGE_WINDOW_OK);
+    CHECK_EQ(judge_ollama_window(json, len, 1412 * 369 / 100, NULL), JUDGE_WINDOW_OK);
+    /* Exactly on the threshold is not truncation: the comparison is strict. */
+    CHECK_EQ(judge_ollama_window(json, len, 1412 * (size_t)OLLAMA_TRUNC_BYTES_PER_TOKEN,
+                                 NULL), JUDGE_WINDOW_OK);
+    free(json);
+}
+
+/* Fits, but the reply is counted too: 3400 in + 150 out is past 85% of 4096. */
+static void test_window_warns_near_the_edge(void)
+{
+    char *json;
+    size_t len;
+
+    /* Guards the fixture, not the code: retuning either macro should say so here
+     * rather than as a baffling OK. */
+    CHECK((3400 + 150) * 100 > OLLAMA_NUM_CTX * OLLAMA_CTX_WARN_PCT);
+    json = fixture_read("tests/fixtures/ollama_reply_near.json", &len);
+    CHECK_EQ(judge_ollama_window(json, len, 3400 * 35 / 10, NULL), JUDGE_WINDOW_NEAR);
+    free(json);
+}
+
+/*
+ * No counts must never read as truncated. The drop is load-bearing, so an
+ * Ollama that stopped reporting prompt_eval_count would otherwise throw away
+ * every batch and quietly empty the board.
+ */
+static void test_window_without_counts_is_unknown(void)
+{
+    char *json;
+    size_t len;
+    long used = -1;
+
+    json = fixture_read("tests/fixtures/ollama_reply_no_counts.json", &len);
+    CHECK_EQ(judge_ollama_window(json, len, 1000000, &used), JUDGE_WINDOW_UNKNOWN);
+    CHECK_EQ(used, 0);
+    free(json);
+
+    CHECK_EQ(judge_ollama_window(NULL, 0, 1000, NULL), JUDGE_WINDOW_UNKNOWN);
+    CHECK_EQ(judge_ollama_window("not json", 8, 1000, NULL), JUDGE_WINDOW_UNKNOWN);
+}
+
 static void test_extract_ollama_envelope(void)
 {
     issue_t is[3];
@@ -697,6 +774,10 @@ int main(void)
     TEST_RUN(test_truncate_long);
     TEST_RUN(test_truncate_utf8_boundary);
     TEST_RUN(test_apply_compacts_and_sorts);
+    TEST_RUN(test_window_detects_truncation);
+    TEST_RUN(test_window_passes_real_batches);
+    TEST_RUN(test_window_warns_near_the_edge);
+    TEST_RUN(test_window_without_counts_is_unknown);
     TEST_RUN(test_extract_ollama_envelope);
     TEST_RUN(test_extract_anthropic_envelope);
 

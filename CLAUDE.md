@@ -206,6 +206,15 @@ cast or a `(void)x` unless the variable is genuinely unused by design.
     it -- naming the criteria made the model echo the names for 59 of 60 rows,
     and one sentence about `keep=false` took rejections from 19 of 60 to 57 of
     60. The comment above the macro lists what was tried.
+16. **An overflowing prompt does not fail; it gets quietly cut.** Past
+    `OLLAMA_NUM_CTX` Ollama cuts the prompt to half the window keeping the tail,
+    so the rubric and the first issues vanish and the model scores issues it
+    cannot see -- 17 of 26 verdicts described another issue at batch 8 / 4096,
+    with a normal-looking reply. `judge_ollama_window()` catches it by bytes per
+    token, since `prompt_eval_count` is taken after the cut, and the batch is
+    dropped. Anything that grows the prompt -- `LLM_BATCH_SIZE`, `LLM_BODY_TRUNC`,
+    the rubric, or a user's `profile` -- has to be checked against the window by
+    running a cycle and reading the `judge:` summary lines, not by estimating.
 
 ## Style
 
