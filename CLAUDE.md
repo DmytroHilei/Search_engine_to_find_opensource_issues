@@ -96,6 +96,9 @@ src/
     judge.c/h     LLM batching; backends behind one `judge_batch()` interface
     render.c/h    board -> Markdown
 third_party/yyjson/
+systemd/          issuewatch.service + .timer, and ollama.service for a rootless
+                  Ollama; setup.sh fills in its @OLLAMA@ binary path
+setup.sh          requirements: packages, Ollama service, weights (WEIGHTS=...)
 build/            every .o, .d and test binary, mirroring the source tree
 Makefile
 ```
@@ -117,7 +120,13 @@ rather than committing a placeholder directory.
 make            # -O2 -march=native -Wall -Wextra -Wpedantic
 make debug      # -O0 -g3 -fsanitize=address,undefined
 make run        # ./issuewatch --dry-run
+make setup      # requirements; WEIGHTS=auto|none|small|default|all
 ```
+
+`setup.sh` resolves `JUDGE_MODE` and every model name through the preprocessor
+from `config.h`, so renaming `OLLAMA_MODEL` needs no edit there. Keep it that
+way: a second hard-coded copy of a model name is how a setup ends up pulling
+weights the binary never asks for.
 
 `-Werror` is on for `make debug`. Warnings are bugs. Do not silence one with a
 cast or a `(void)x` unless the variable is genuinely unused by design.

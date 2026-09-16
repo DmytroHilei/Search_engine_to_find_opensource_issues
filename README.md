@@ -8,6 +8,62 @@ push to your phone per cycle. One C11 process, single-threaded, ~1–2 MB idle.
 Design rationale is in [CONTEXT.md](CONTEXT.md). Agent build rules are in
 [CLAUDE.md](CLAUDE.md).
 
+## Requirements
+
+| What | Needed for | Size |
+| --- | --- | --- |
+| C11 compiler, `make`, `pkg-config` | building | — |
+| `libcurl` ≥ 7.62 with headers (HTTP/2 preferred) | building; `curl_multi_poll` is the I/O loop | — |
+| yyjson | JSON | vendored in `third_party/`, nothing to install |
+| [Ollama](https://ollama.com/download) | `JUDGE_LOCAL` / `JUDGE_HYBRID` only | — |
+| `qwen3:8b` weights (`OLLAMA_MODEL`) | the default local judge | 5.2 GB disk, ~6 GB loaded |
+| `qwen3:4b` weights (`OLLAMA_MODEL_SMALL`) | optional, a card that cannot hold the 8B | 2.5 GB disk |
+| `qwen3:1.7b` weights (`OLLAMA_SCREEN_MODEL`) | `JUDGE_HYBRID` only | ~1.4 GB disk |
+| `gh` CLI | optional: supplies `GH_TOKEN`, creates the gist | — |
+
+One command installs what is missing and reports what is already there:
+
+```sh
+make setup-check        # report only: installs nothing, pulls nothing
+make setup              # install packages, set up Ollama, pull weights
+```
+
+It uses `apt`, `dnf` or `pacman` (with `sudo`, visibly) for the build packages,
+and skips anything already present, so it is safe to re-run.
+
+**The weights are optional**, and `WEIGHTS` picks them:
+
+```sh
+make setup                     # auto: exactly what JUDGE_MODE needs
+make setup WEIGHTS=none        # nothing -- e.g. you judge through JUDGE_API
+make setup WEIGHTS=small       # the 4B only, for a smaller card
+make setup WEIGHTS=all         # default and small (+ screen model if hybrid)
+```
+
+`auto` reads `JUDGE_MODE` and the model names out of `src/config.h` through the
+preprocessor, so it always pulls what the binary will actually ask for:
+`JUDGE_API` needs no weights at all, `JUDGE_LOCAL` needs `OLLAMA_MODEL`,
+`JUDGE_HYBRID` adds `OLLAMA_SCREEN_MODEL`. After `WEIGHTS=small`, run the daemon
+with `--model qwen3:4b` — the binary still defaults to the 8B.
+
+Ollama itself is not installed for you: its official installer runs as root, so
+that step stays yours. A **rootless** install (binary in `~/.local/bin`) has no
+service, and `make setup` gives it one — `systemd/ollama.service` as a user
+unit. Without it the server is whatever you last typed into a terminal, and a
+reboot silently ends it: the next cycle fails every judge batch with `Couldn't
+connect to server` and publishes nothing new.
+
+### VRAM is shared with your desktop
+
+The judge does not demand the whole model on the GPU: `OLLAMA_NUM_GPU -1` lets
+Ollama put what fits on the card and the rest on the CPU, a little slower
+rather than failing outright. It matters on a laptop: an X11 session on a
+hybrid-GPU machine can render the whole desktop on the discrete card —
+measured at 2.5 GB of an 8 GB RTX 5060 for Xorg, gnome-shell and a browser.
+If your laptop also has an integrated GPU, logging in with the **Wayland**
+session (gear icon on the GDM login screen) moves the desktop onto it and
+hands that memory back to the judge.
+
 ## Build
 
 ```sh
@@ -15,11 +71,6 @@ make                    # -O2 -march=native
 make debug              # -O0 -g3 -Werror, ASan + UBSan
 make test               # build and run every tests/test_*.c
 ```
-
-Needs `libcurl` ≥ 7.62 (for `curl_multi_poll`) with HTTP/2, and `pkg-config`.
-yyjson is vendored in `third_party/yyjson/`; there is nothing else to install.
-
-On Debian/Ubuntu: `apt install libcurl4-openssl-dev pkg-config`.
 
 ## Configure
 
@@ -320,12 +371,13 @@ persist, the ages increment, and anything you close disappears from the board.
 ### If you installed Ollama without root
 
 The official installer needs root and sets up a system service. A rootless
-install puts the binary at `~/.local/bin/ollama` with no service, so start the
-server yourself and set the idle unload window **there** — not in
-`systemd/issuewatch.service`, where it does nothing:
+install puts the binary at `~/.local/bin/ollama` with no service — `make setup`
+installs `systemd/ollama.service` as a user unit for exactly this case. It sets
+the idle unload window **there**, on the server, which is the only place it
+works; in `systemd/issuewatch.service` it does nothing:
 
 ```sh
-OLLAMA_KEEP_ALIVE=2m ollama serve
+systemctl --user status ollama     # after make setup
 ```
 
 `--oneshot` will simply fail its judge batches if the server is not up, publish

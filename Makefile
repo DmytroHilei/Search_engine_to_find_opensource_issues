@@ -36,7 +36,7 @@ DEPS = $(OBJS:.o=.d) $(TEST_BINS:%=%.d)
 
 STAMP = $(BUILD)/.buildflags
 
-.PHONY: all debug run test clean
+.PHONY: all debug run test clean setup setup-check
 .DEFAULT_GOAL := all
 
 all: $(BIN)
@@ -120,3 +120,16 @@ clean-obj:
 clean: clean-obj
 
 -include $(DEPS)
+
+# Requirements: build packages, a service for a rootless Ollama, and weights.
+# WEIGHTS is the one switch -- auto | none | small | default | all -- because the
+# weights are gigabytes that a JUDGE_API install never uses. auto pulls exactly
+# what JUDGE_MODE in src/config.h needs. See the top of setup.sh.
+WEIGHTS ?= auto
+
+setup:
+	WEIGHTS=$(WEIGHTS) ./setup.sh
+
+# Reports what setup would do; installs nothing, pulls nothing.
+setup-check:
+	WEIGHTS=$(WEIGHTS) ./setup.sh --check

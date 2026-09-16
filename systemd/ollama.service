@@ -1,0 +1,25 @@
+[Unit]
+Description=Ollama server for issuewatch's local judge (rootless install)
+Documentation=file:%h/Search_engine/README.md
+After=network-online.target
+
+# Only for a rootless Ollama (binary in ~/.local/bin, no service of its own).
+# The official root installer ships its own system unit -- do not install both.
+# setup.sh substitutes @OLLAMA@ with the binary it found and installs this as a
+# user unit.
+#
+# Without it the server is whatever was last typed into a terminal, and a reboot
+# silently ends it: the next cycle got "Couldn't connect to server" for every
+# batch and judged nothing.
+
+[Service]
+ExecStart=@OLLAMA@ serve
+# Read by this process, not by issuewatch.service -- see the note there. Two
+# minutes spans the 10 s gaps of `--runs N`, so the model loads once per burst,
+# but hands the VRAM back to the desktop between the 3-hour timer cycles.
+Environment=OLLAMA_KEEP_ALIVE=2m
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
