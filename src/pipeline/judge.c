@@ -645,8 +645,13 @@ static int ollama_post(arena_t *a, void *pool, const char *model,
      * num_ctx is sent rather than inherited: it is a server-side default the
      * environment can change, and the judge degrades sharply when the prompt
      * approaches it. See OLLAMA_NUM_CTX. */
-    if (!yyjson_mut_obj_add_int(doc, opts, "num_gpu", OLLAMA_NUM_GPU) ||
-        !yyjson_mut_obj_add_int(doc, opts, "num_ctx", OLLAMA_NUM_CTX) ||
+    /* num_gpu is only sent when pinned. Omitting it lets Ollama fit the layers
+     * into whatever VRAM is actually free; see OLLAMA_NUM_GPU for the 500 that
+     * sending 999 turned into. */
+    if (OLLAMA_NUM_GPU >= 0 &&
+        !yyjson_mut_obj_add_int(doc, opts, "num_gpu", OLLAMA_NUM_GPU))
+        return -1;
+    if (!yyjson_mut_obj_add_int(doc, opts, "num_ctx", OLLAMA_NUM_CTX) ||
         !yyjson_mut_obj_add_int(doc, opts, "temperature", 0))
         return -1;
 

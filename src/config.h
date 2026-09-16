@@ -231,7 +231,20 @@ static const kw_t KEYWORDS[] = {
 #define OLLAMA_MODEL           "qwen3:8b"
 #define OLLAMA_MODEL_SMALL     "qwen3:4b"
 #define OLLAMA_SCREEN_MODEL    "qwen3:1.7b"  /* JUDGE_HYBRID screening pass */
-#define OLLAMA_NUM_GPU         999   /* 0 = pure CPU */
+/*
+ * Layers to put on the GPU. -1 omits the option so Ollama fits as many as the
+ * free VRAM allows and runs the rest on the CPU; 0 is pure CPU; a positive
+ * count pins it.
+ *
+ * It was 999, meaning "all of them", and that is a promise about free memory
+ * this program cannot keep: VRAM is shared with the desktop. After a reboot
+ * Xorg, gnome-shell and a browser held 2578 MiB of an 8151 MiB laptop GPU, and
+ * qwen3:8b needs its 4644 MiB of weights PLUS a 576 MiB KV cache. With 999 the
+ * KV allocation failed, every request came back 500, and a whole cycle judged
+ * nothing. Unpinned, the same load put 4.21 of 5.97 GB on the GPU and answered.
+ * A slower judge is recoverable; one that cannot load at all is not.
+ */
+#define OLLAMA_NUM_GPU         -1
 /*
  * Pinned rather than inherited. Ollama's own default is 4096 today, but it is a
  * server-side setting that OLLAMA_CONTEXT_LENGTH can change out from under this
